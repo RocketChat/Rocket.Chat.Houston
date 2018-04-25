@@ -1,5 +1,5 @@
 {
-  "name": "rocket.chat.houston",
+  "name": "@rocket.chat/houston",
   "version": "1.0.0",
   "description": "Rocket.Chat Command Line Tools",
   "main": "index.js",
