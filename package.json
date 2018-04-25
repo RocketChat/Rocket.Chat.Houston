@@ -1,12 +1,17 @@
 {
   "name": "@rocket.chat/houston",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Rocket.Chat Command Line Tools",
   "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RocketChat/Rocket.Chat.Houston.git"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "",
+  "author": "Rodrigo Nascimento <rodrigo.nascimento@rocket.chat>",
+  "private": false,
   "license": "MIT",
   "bin": {
     "houston": "./bin/cli.js"
@@ -20,5 +25,10 @@
     "semver": "^5.5.0",
     "simple-git": "^1.92.0",
     "underscore": "^1.9.0"
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/RocketChat/Rocket.Chat.Houston/issues"
+  },
+  "homepage": "https://github.com/RocketChat/Rocket.Chat.Houston#readme",
+  "devDependencies": {}
 }
