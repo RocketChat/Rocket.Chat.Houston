@@ -6,6 +6,14 @@ const semver = require('semver');
 const inquirer = require('inquirer');
 const git = require('simple-git/promise')(process.cwd());
 const logs = require('./logs');
+const octokit = require('@octokit/rest')();
+
+octokit.authenticate({
+	type: 'token',
+	token: process.env.GITHUB_TOKEN
+});
+const owner = 'RocketChat';
+const repo = 'Rocket.Chat';
 
 let pkgJson = {};
 
@@ -54,7 +62,13 @@ let selectedVersion;
 git.status()
 	.then(status => {
 		if (status.current === 'release-candidate') {
-			return semver.inc(pkgJson.version, 'prerelease', 'rc');
+			return inquirer.prompt([{
+				type: 'confirm',
+				message: 'Merge from develop?',
+				name: 'merge'
+			}])
+				.then(answers => answers.merge && git.mergeFromTo('origin/develop', 'release-candidate'))
+				.then(() => semver.inc(pkgJson.version, 'prerelease', 'rc'));
 		}
 		if (/release-\d+\.\d+\.\d+/.test(status.current)) {
 			return semver.inc(pkgJson.version, 'patch');
@@ -123,6 +137,31 @@ git.status()
 		name: 'tag'
 	}]))
 	.then(answers => answers.tag && git.addTag(selectedVersion))
+	.then(() => inquirer.prompt([{
+		type: 'confirm',
+		message: 'Push branch?',
+		name: 'pushBranch'
+	}]))
+	.then(answers => {
+		return answers.pushBranch && git.status().then(status => {
+			return git.push('origin', status.current);
+		});
+	})
+	.then(() => inquirer.prompt([{
+		type: 'confirm',
+		message: 'Push tag?',
+		name: 'pushTag'
+	}]))
+	.then(answers => answers.pushTag && git.push('origin', selectedVersion))
+	// .then(() => inquirer.prompt([{
+	// 	type: 'confirm',
+	// 	message: 'Set history to tag?',
+	// 	name: 'pushTag'
+	// }]))
+	// .then(answers => {
+	// 	return answers.pushTag && octokit.repos.getReleaseByTag({owner, repo, selectedVersion})
+	// 		.then((release) => octokit.repos.editRelease({owner, repo, id: release.id, tag_name: selectedVersion, name: selectedVersion, body, prerelease: true}));
+	// })
 	.catch((error) => {
 		console.error(error);
 	});
