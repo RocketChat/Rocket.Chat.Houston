@@ -102,7 +102,14 @@ git.status()
 		return Promise.all(files.map(file => {
 			return readFile(file)
 				.then(data => {
-					return writeFile(file, data.replace(pkgJson.version, version));
+					data = data.replace(pkgJson.version, version);
+					if (file.includes('sandstorm-pkgdef.capnp')) {
+						data = data.replace(/appVersion\s=\s(\d+),\s\s#\sIncrement/, (s, number) => {
+							number = parseInt(number, 10);
+							return s.replace(number, ++number);
+						});
+					}
+					return writeFile(file, data);
 				});
 		})).then(() => version);
 	})

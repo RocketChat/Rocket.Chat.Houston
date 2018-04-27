@@ -167,7 +167,7 @@ function sort(a, b) {
 	return 0;
 }
 
-module.exports = function({tag, write = true, title = true}) {
+module.exports = function({tag, write = true, title = true} = {}) {
 	let historyData = (() => {
 		try {
 			return require(historyDataFile);
