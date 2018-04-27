@@ -48,28 +48,6 @@ const SummaryNameEmoticons = {
 	contributor: '👩‍💻👨‍💻'
 };
 
-const historyData = (() => {
-	try {
-		return require(historyDataFile);
-	} catch (error) {
-		throw new Error(`File ${ historyDataFile } not found`);
-	}
-})();
-
-const historyManualData = (() => {
-	try {
-		return require(historyManualDataFile);
-	} catch (error) {
-		console.error(`File ${ historyManualDataFile } not found, ignoring manual entries`);
-		return {};
-	}
-})();
-
-Object.keys(historyManualData).forEach(tag => {
-	historyData[tag] = historyData[tag] || [];
-	historyData[tag].unshift(...historyManualData[tag]);
-});
-
 function groupPRs(prs) {
 	const groups = {
 		BREAK: [],
@@ -98,37 +76,6 @@ function getTagDate(tag) {
 function getLatestCommitDate() {
 	return execSync('git log --date=short --format=\'%ad\' -1').toString().replace(/\n/, '');
 }
-
-Object.keys(historyData).forEach(tag => {
-	historyData[tag] = {
-		prs: historyData[tag],
-		rcs: []
-	};
-});
-
-Object.keys(historyData).forEach(tag => {
-	if (/-rc/.test(tag)) {
-		const mainTag = tag.replace(/-rc.*/, '');
-		historyData[mainTag] = historyData[mainTag] || {
-			noMainRelease: true,
-			prs: [],
-			rcs: []
-		};
-
-		if (historyData[mainTag].noMainRelease) {
-			historyData[mainTag].rcs.push({
-				tag,
-				prs: historyData[tag].prs
-			});
-		} else {
-			historyData[mainTag].prs.push(...historyData[tag].prs);
-		}
-
-		delete historyData[tag];
-	}
-});
-
-const file = [];
 
 function getSummary(contributors, groupedPRs) {
 	const summary = [];
@@ -220,41 +167,113 @@ function sort(a, b) {
 	return 0;
 }
 
-Object.keys(historyData).sort(sort).forEach(tag => {
-	const {prs, rcs} = historyData[tag];
+module.exports = function({tag, write = true, title = true}) {
+	let historyData = (() => {
+		try {
+			return require(historyDataFile);
+		} catch (error) {
+			throw new Error(`File ${ historyDataFile } not found`);
+		}
+	})();
 
-	if (!prs.length && !rcs.length) {
-		return;
+	let historyManualData = (() => {
+		try {
+			return require(historyManualDataFile);
+		} catch (error) {
+			console.error(`File ${ historyManualDataFile } not found, ignoring manual entries`);
+			return {};
+		}
+	})();
+
+	if (tag) {
+		historyData = {
+			[tag]: historyData[tag] || []
+		};
+		historyManualData = {
+			[tag]: historyManualData[tag] || []
+		};
 	}
 
-	const tagDate = tag === 'HEAD' ? getLatestCommitDate() : getTagDate(tag);
+	Object.keys(historyManualData).forEach(tag => {
+		historyData[tag] = historyData[tag] || [];
+		historyData[tag].unshift(...historyManualData[tag]);
+	});
 
-	const {data, summary} = renderPRs(prs);
+	Object.keys(historyData).forEach(tag => {
+		historyData[tag] = {
+			prs: historyData[tag],
+			rcs: []
+		};
+	});
 
-	const tagText = tag === 'HEAD' ? 'Next' : tag;
+	Object.keys(historyData).forEach(tag => {
+		if (/-rc/.test(tag)) {
+			const mainTag = tag.replace(/-rc.*/, '');
+			historyData[mainTag] = historyData[mainTag] || {
+				noMainRelease: true,
+				prs: [],
+				rcs: []
+			};
 
-	if (historyData[tag].noMainRelease) {
-		file.push(`\n# ${ tagText } (Under Release Candidate Process)`);
-	} else {
-		file.push(`\n# ${ tagText }`);
-		file.push(`\`${ tagDate }${ summary }\``);
-	}
-
-	file.push(...data);
-
-	if (Array.isArray(rcs)) {
-		rcs.reverse().forEach(rc => {
-			const {data, summary} = renderPRs(rc.prs);
-
-			if (historyData[tag].noMainRelease) {
-				const tagDate = getTagDate(rc.tag);
-				file.push(`\n## ${ rc.tag }`);
-				file.push(`\`${ tagDate }${ summary }\``);
+			if (historyData[mainTag].noMainRelease) {
+				historyData[mainTag].rcs.push({
+					tag,
+					prs: historyData[tag].prs
+				});
+			} else {
+				historyData[mainTag].prs.push(...historyData[tag].prs);
 			}
 
-			file.push(...data);
-		});
-	}
-});
+			delete historyData[tag];
+		}
+	});
 
-fs.writeFileSync(historyFile, file.join('\n'));
+	const file = [];
+
+	Object.keys(historyData).sort(sort).forEach(tag => {
+		const {prs, rcs} = historyData[tag];
+
+		if (!prs.length && !rcs.length) {
+			return;
+		}
+
+		const tagDate = tag === 'HEAD' ? getLatestCommitDate() : getTagDate(tag);
+
+		const {data, summary} = renderPRs(prs);
+
+		const tagText = tag === 'HEAD' ? 'Next' : tag;
+
+		if (historyData[tag].noMainRelease) {
+			if (title) {
+				file.push(`\n# ${ tagText } (Under Release Candidate Process)`);
+			}
+		} else {
+			if (title) {
+				file.push(`\n# ${ tagText }`);
+			}
+			file.push(`\`${ tagDate }${ summary }\``);
+		}
+
+		file.push(...data);
+
+		if (Array.isArray(rcs)) {
+			rcs.reverse().forEach(rc => {
+				const {data, summary} = renderPRs(rc.prs);
+
+				if (historyData[tag].noMainRelease) {
+					const tagDate = getTagDate(rc.tag);
+					if (title) {
+						file.push(`\n## ${ rc.tag }`);
+					}
+					file.push(`\`${ tagDate }${ summary }\``);
+				}
+
+				file.push(...data);
+			});
+		}
+	});
+
+	write && fs.writeFileSync(historyFile, file.join('\n'));
+
+	return file.join('\n');
+};

@@ -2,6 +2,7 @@
 
 const program = require('commander');
 const logs = require('../src/logs');
+const md = require('../src/md');
 
 program
 	.command('logs')
@@ -15,7 +16,7 @@ program
 	.command('md')
 	.description('Generate History.md from History.json')
 	.action(function() {
-		require('../src/md');
+		md();
 	});
 
 program

@@ -7,6 +7,7 @@ const inquirer = require('inquirer');
 const git = require('simple-git/promise')(process.cwd());
 const logs = require('./logs');
 const octokit = require('@octokit/rest')();
+const md = require('../src/md');
 
 octokit.authenticate({
 	type: 'token',
@@ -109,7 +110,7 @@ git.status()
 		return logs({headName: version});
 	})
 	.then(() => {
-		require('./md');
+		md();
 		return inquirer.prompt([{
 			type: 'confirm',
 			message: 'Commit files?',
@@ -153,15 +154,16 @@ git.status()
 		name: 'pushTag'
 	}]))
 	.then(answers => answers.pushTag && git.push('origin', selectedVersion))
-	// .then(() => inquirer.prompt([{
-	// 	type: 'confirm',
-	// 	message: 'Set history to tag?',
-	// 	name: 'pushTag'
-	// }]))
-	// .then(answers => {
-	// 	return answers.pushTag && octokit.repos.getReleaseByTag({owner, repo, selectedVersion})
-	// 		.then((release) => octokit.repos.editRelease({owner, repo, id: release.id, tag_name: selectedVersion, name: selectedVersion, body, prerelease: true}));
-	// })
+	.then(() => inquirer.prompt([{
+		type: 'confirm',
+		message: 'Set history to tag?',
+		name: 'pushTag'
+	}]))
+	.then(answers => {
+		const body = md({tag: selectedVersion, write: false, title: false});
+		return answers.pushTag && octokit.repos.getReleaseByTag({owner, repo, tag: selectedVersion})
+			.then((release) => octokit.repos.editRelease({owner, repo, id: release.data.id, tag_name: selectedVersion, body, name: selectedVersion, prerelease: selectedVersion.includes('-rc.')}));
+	})
 	.catch((error) => {
 		console.error(error);
 	});
