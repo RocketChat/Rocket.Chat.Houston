@@ -1,6 +1,6 @@
 {
   "name": "@rocket.chat/houston",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Rocket.Chat Command Line Tools",
   "main": "index.js",
   "repository": {
