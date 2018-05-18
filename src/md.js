@@ -261,7 +261,7 @@ module.exports = function({tag, write = true, title = true} = {}) {
 				const {data, summary} = renderPRs(rc.prs);
 
 				if (historyData[tag].noMainRelease) {
-					const tagDate = getTagDate(rc.tag);
+					const tagDate = getTagDate(rc.tag) || getLatestCommitDate();
 					if (title) {
 						file.push(`\n## ${ rc.tag }`);
 					}
