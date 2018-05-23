@@ -237,7 +237,7 @@ module.exports = function({tag, write = true, title = true} = {}) {
 			return;
 		}
 
-		const tagDate = tag === 'HEAD' ? getLatestCommitDate() : getTagDate(tag);
+		const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
 
 		const {data, summary} = renderPRs(prs);
 

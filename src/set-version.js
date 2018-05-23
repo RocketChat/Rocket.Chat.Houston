@@ -169,7 +169,16 @@ git.status()
 	.then(answers => {
 		const body = md({tag: selectedVersion, write: false, title: false});
 		return answers.pushTag && octokit.repos.getReleaseByTag({owner, repo, tag: selectedVersion})
-			.then((release) => octokit.repos.editRelease({owner, repo, id: release.data.id, tag_name: selectedVersion, body, name: selectedVersion, prerelease: selectedVersion.includes('-rc.')}));
+			.then((release) => {
+				console.log('Editing release');
+				octokit.repos.editRelease({owner, repo, id: release.data.id, tag_name: selectedVersion, body, name: selectedVersion, prerelease: selectedVersion.includes('-rc.')});
+			}).catch((error) => {
+				if (error.code === 404) {
+					console.log('Creating release');
+					return octokit.repos.createRelease({owner, repo, tag_name: selectedVersion, name: selectedVersion, body, draft: false, prerelease: selectedVersion.includes('-rc.')});
+				}
+				return error;
+			});
 	})
 	.catch((error) => {
 		console.error(error);
