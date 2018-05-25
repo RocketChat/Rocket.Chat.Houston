@@ -25,8 +25,8 @@ octokit.authenticate({
 	type: 'token',
 	token: process.env.GITHUB_TOKEN
 });
-const owner = 'RocketChat';
-const repo = 'Rocket.Chat';
+let owner = 'RocketChat';
+let repo = 'Rocket.Chat';
 
 function promiseRetryRateLimit(promiseFn, retryWait = 60000) {
 	return new Promise((resolve, reject) => {
@@ -102,7 +102,7 @@ function getPRNumeberFromMessage(message, item) {
 	return number;
 }
 
-function getPullRequests(from, to) {
+async function getPullRequests(from, to) {
 	const logParams = ['--no-decorate', '--graph', '-E', `--grep=${ commitRegexString }`, `${ from }...${ to }`];
 	logParams.format = {
 		hash: '%H',
@@ -112,91 +112,94 @@ function getPullRequests(from, to) {
 		author_email: '%ae'
 	};
 
-	return git.log(logParams).then((log) => {
-		const items = log.all
-			.filter(item => /^(\*\s)[0-9a-z]+$/.test(item.hash))
-			.map(item => {
-				item.hash = item.hash.replace(/^(\*\s)/, '');
-				return item;
-			})
-			.filter(item => commitRegex.test(item.message));
+	const log = await git.log(logParams);
 
-		const data = [];
+	const items = log.all
+		.filter(item => /^(\*\s)[0-9a-z]+$/.test(item.hash))
+		.map(item => {
+			item.hash = item.hash.replace(/^(\*\s)/, '');
+			return item;
+		})
+		.filter(item => commitRegex.test(item.message));
 
-		return new Promise((resolve, reject) => {
-			const bar = new ProgressBar('  [:bar] :current/:total :percent :etas', {
-				total: items.length,
-				incomplete: ' ',
-				width: 20
+	const data = [];
+
+	return new Promise((resolve, reject) => {
+		const bar = new ProgressBar('  [:bar] :current/:total :percent :etas', {
+			total: items.length,
+			incomplete: ' ',
+			width: 20
+		});
+
+		function process() {
+			if (items.length === 0) {
+				resolve(data);
+			}
+
+			const partItems = items.splice(0, 10);
+			bar.tick(partItems.length);
+
+			const promises = partItems.map(item => {
+				return getPRInfo(getPRNumeberFromMessage(item.message, item), item);
 			});
 
-			function process() {
-				if (items.length === 0) {
+			return Promise.all(promises).then(result => {
+				data.push(..._.compact(result));
+				if (items.length) {
+					setTimeout(process, 100);
+				} else {
 					resolve(data);
 				}
+			}).catch(error => reject(error));
+		}
 
-				const partItems = items.splice(0, 10);
-				bar.tick(partItems.length);
-
-				const promises = partItems.map(item => {
-					return getPRInfo(getPRNumeberFromMessage(item.message, item), item);
-				});
-
-				return Promise.all(promises).then(result => {
-					data.push(..._.compact(result));
-					if (items.length) {
-						setTimeout(process, 100);
-					} else {
-						resolve(data);
-					}
-				}).catch(error => reject(error));
-			}
-
-			process();
-		});
+		process();
 	});
 }
 
-function getTags() {
-	return git.tags().then((tags) => {
-		tags = tags.all.filter(tag => /^\d+\.\d+\.\d+(-rc\.\d+)?$/.test(tag));
+async function getTags() {
+	let tags = await git.tags();
 
-		tags = tags.sort((a, b) => {
-			if (semver.gt(a, b)) {
-				return 1;
-			}
-			if (semver.lt(a, b)) {
-				return -1;
-			}
-			return 0;
-		});
+	tags = tags.all.filter(tag => /^\d+\.\d+\.\d+(-rc\.\d+)?$/.test(tag));
 
-		tags.push('HEAD');
-
-		return tags
-			.map((item, index) => {
-				return {
-					tag: item,
-					before: index ? tags[--index] : null
-				};
-			})
-			.filter(item => item.tag === 'HEAD' || semver.gte(item.tag, minTag))
-			.reduce((value, item) => {
-				value[item.tag] = item;
-				return value;
-			}, {});
+	tags = tags.sort((a, b) => {
+		if (semver.gt(a, b)) {
+			return 1;
+		}
+		if (semver.lt(a, b)) {
+			return -1;
+		}
+		return 0;
 	});
+
+	tags.push('HEAD');
+
+	return tags
+		.map((item, index) => {
+			return {
+				tag: item,
+				before: index ? tags[--index] : null
+			};
+		})
+		.filter(item => item.tag === 'HEAD' || semver.gte(item.tag, minTag))
+		.reduce((value, item) => {
+			value[item.tag] = item;
+			return value;
+		}, {});
 }
 
-function getMissingTags() {
-	return getTags().then(tags => {
-		const missingTags = _.difference(Object.keys(tags), Object.keys(historyData));
-		missingTags.push('HEAD');
-		return _.pick(tags, missingTags);
-	});
+async function getMissingTags() {
+	const tags = await getTags();
+	const missingTags = _.difference(Object.keys(tags), Object.keys(historyData));
+
+	missingTags.push('HEAD');
+
+	return _.pick(tags, missingTags);
 }
 
-module.exports = function({headName = 'HEAD'}) {
+module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:_repo = 'Rocket.Chat'}) {
+	owner = _owner;
+	repo = _repo;
 
 	return new Promise((resolve) => {
 		getMissingTags().then(missingTags => {

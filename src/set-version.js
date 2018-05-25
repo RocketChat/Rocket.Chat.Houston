@@ -1,7 +1,6 @@
-/* eslint object-shorthand: 0, prefer-template: 0 */
-
 const path = require('path');
 const fs = require('fs');
+const { promisify } = require('util');
 const semver = require('semver');
 const inquirer = require('inquirer');
 const git = require('simple-git/promise')(process.cwd());
@@ -13,16 +12,11 @@ octokit.authenticate({
 	type: 'token',
 	token: process.env.GITHUB_TOKEN
 });
-const owner = 'RocketChat';
-const repo = 'Rocket.Chat';
 
 let pkgJson = {};
 
 try {
-	pkgJson = require(path.resolve(
-		process.cwd(),
-		'./package.json'
-	));
+	pkgJson = require(path.resolve(process.cwd(), './package.json'));
 } catch (err) {
 	console.error('no root package.json found');
 }
@@ -37,149 +31,272 @@ const files = [
 	'./.docker/Dockerfile.rhel',
 	'./packages/rocketchat-lib/rocketchat.info'
 ];
-const readFile = (file) => {
-	return new Promise((resolve, reject) => {
-		fs.readFile(file, 'utf8', (error, result) => {
-			if (error) {
-				return reject(error);
-			}
-			resolve(result);
-		});
-	});
-};
-const writeFile = (file, data) => {
-	return new Promise((resolve, reject) => {
-		fs.writeFile(file, data, 'utf8', (error, result) => {
-			if (error) {
-				return reject(error);
-			}
-			resolve(result);
-		});
-	});
-};
 
-let selectedVersion;
+const readFile = promisify(fs.readFile);
+const writeFile = promisify(fs.writeFile);
 
-git.status()
-	.then(status => {
+class Houston {
+	constructor({
+		owner,
+		repo,
+		version
+	} = {}) {
+		this.owner = owner;
+		this.repo = repo;
+		this.version = version;
+	}
+
+	async init() {
+		await this.getRemote();
+		await this.selectAction();
+	}
+
+	async getRemote() {
+		if (this.owner && this.repo) {
+			return;
+		}
+
+		let remotes = await git.listRemote(['--get-url']);
+		remotes = remotes.split(/\n/);
+
+		if (remotes.length === 0) {
+			throw new Error('No git remote found');
+		}
+
+		const [, owner, repo] = remotes[0].match(/\/([^\/]+)\/([^\/]+)\.git$/);
+		this.owner = owner;
+		this.repo = repo;
+	}
+
+	async selectAction() {
+		const status = await git.status();
+
 		if (status.current === 'release-candidate') {
-			return inquirer.prompt([{
-				type: 'confirm',
-				message: 'Merge from develop?',
-				name: 'merge'
-			}])
-				.then(answers => answers.merge && git.mergeFromTo('origin/develop', 'release-candidate'))
-				.then(() => semver.inc(pkgJson.version, 'prerelease', 'rc'));
+			return await this.newReleaseCandidate();
 		}
+
 		if (/release-\d+\.\d+\.\d+/.test(status.current)) {
-			return semver.inc(pkgJson.version, 'patch');
+			return await this.newFinalRelease();
 		}
+
 		if (status.current === 'develop-sync') {
-			return semver.inc(pkgJson.version, 'minor') + '-develop';
+			return await this.newSyncRelease();
 		}
-		return Promise.reject(`No release action for branch ${ status.current }`);
-	})
-	.then(nextVersion => inquirer.prompt([{
-		type: 'list',
-		message: `The current version is ${ pkgJson.version }. Update to version:`,
-		name: 'version',
-		choices: [
-			nextVersion,
-			'custom'
-		]
-	}]))
-	.then(answers => {
+
+		throw new Error(`No release action for branch ${ status.current }`);
+	}
+
+	async newReleaseCandidate() {
+		await this.shouldMergeFromTo({from: 'origin/develop', to: 'release-candidate'});
+		await this.selectVersionToUpdate({currentVersion: pkgJson.version, release: 'prerelease', identifier: 'rc'});
+		await this.shouldPushCurrentBranch();
+		await this.shouldAddTag();
+		await this.shouldSetHistoryToGithubRelease();
+	}
+
+	async newFinalRelease() {
+		await this.selectVersionToUpdate({currentVersion: pkgJson.version, release: 'patch'});
+		await this.shouldPushCurrentBranch();
+		await this.shouldCreateDraftReleaseWithHistory();
+	}
+
+	async newSyncRelease() {
+		// @TODO Allow run from master and create the branch develop-sync
+		await this.shouldMergeFromTo({from: 'origin/master', to: 'develop-sync'});
+		await this.selectVersionToUpdate({currentVersion: pkgJson.version, release: 'minor', suffix: '-develop'});
+		await this.shouldPushCurrentBranch();
+	}
+
+	async shouldPushTag() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: 'Push tag?',
+			name: 'pushTag'
+		}]);
+
+		return answers.pushTag && await git.push('origin', this.version);
+	}
+
+	async shouldPushCurrentBranch() {
+		const status = await git.status();
+
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Push ${ status.current } branch?`,
+			name: 'pushBranch'
+		}]);
+
+		return answers.pushBranch && await git.push('origin', status.current);
+	}
+
+	async shouldAddTag() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Add tag ${ this.version }?`,
+			name: 'tag'
+		}]);
+
+		if (answers.tag) {
+			await git.addTag(this.version);
+			await this.shouldPushTag();
+		}
+	}
+
+	async shouldMergeFromTo({from, to}) {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Merge from ${ from }?`,
+			name: 'merge'
+		}]);
+
+		return answers.merge && await git.mergeFromTo(from, to);
+	}
+
+	async selectVersionToUpdate({currentVersion, release, identifier, suffix = ''}) {
+		const nextVersion = semver.inc(currentVersion, release, identifier) + suffix;
+		let answers = await inquirer.prompt([{
+			type: 'list',
+			message: `The current version is ${ pkgJson.version }. Update to version:`,
+			name: 'version',
+			choices: [
+				nextVersion,
+				'custom'
+			]
+		}]);
+
 		if (answers.version === 'custom') {
-			return inquirer.prompt([{
+			answers = await inquirer.prompt([{
 				name: 'version',
 				message: 'Enter your custom version:'
 			}]);
 		}
-		return answers;
-	})
-	.then(({ version }) => {
-		selectedVersion = version;
-		return Promise.all(files.map(file => {
-			return readFile(file)
-				.then(data => {
-					data = data.replace(pkgJson.version, version);
-					if (file.includes('sandstorm-pkgdef.capnp')) {
-						data = data.replace(/appVersion\s=\s(\d+),\s\s#\sIncrement/, (s, number) => {
-							number = parseInt(number, 10);
-							return s.replace(number, ++number);
-						});
-					}
-					return writeFile(file, data);
+
+		const { version } = answers;
+		this.version = version;
+
+		await this.updateVersionInFiles();
+		await this.shouldCommitFiles();
+		await this.updateHistory();
+	}
+
+	async updateVersionInFiles() {
+		await Promise.all(files.map(async(file) => {
+			let data = await readFile(file, 'utf8');
+			data = data.replace(pkgJson.version, this.version);
+			if (file.includes('sandstorm-pkgdef.capnp')) {
+				data = data.replace(/appVersion\s=\s(\d+),\s\s#\sIncrement/, (s, number) => {
+					number = parseInt(number, 10);
+					return s.replace(number, ++number);
 				});
-		})).then(() => version);
-	})
-	.then((version) => {
-		return logs({headName: version});
-	})
-	.then(() => {
+			}
+			return await writeFile(file, data, 'utf8');
+		}));
+	}
+
+	async updateHistory() {
+		await logs({headName: this.version/*, owner: this.owner, repo: this.repo*/});
 		md();
-		return inquirer.prompt([{
+		await this.shouldCommitFiles({amend: true});
+	}
+
+	async shouldCommitFiles({amend = false} = {}) {
+		let answers = await inquirer.prompt([{
 			type: 'confirm',
 			message: 'Commit files?',
 			name: 'commit'
 		}]);
-	})
-	.then(answers => {
+
 		if (!answers.commit) {
-			return Promise.reject(answers);
+			return;
 		}
 
-		return git.status();
-	})
-	.then(status => inquirer.prompt([{
-		type: 'checkbox',
-		message: 'Select files to commit?',
-		name: 'files',
-		choices: status.files.map(file => { return {name: `${ file.working_dir } ${ file.path }`, checked: true}; })
-	}]))
-	.then(answers => answers.files.length && git.add(answers.files.map(file => file.slice(2))))
-	.then(() => git.commit(`Bump version to ${ selectedVersion }`))
-	.then(() => inquirer.prompt([{
-		type: 'confirm',
-		message: `Add tag ${ selectedVersion }?`,
-		name: 'tag'
-	}]))
-	.then(answers => answers.tag && git.addTag(selectedVersion))
-	.then(() => inquirer.prompt([{
-		type: 'confirm',
-		message: 'Push branch?',
-		name: 'pushBranch'
-	}]))
-	.then(answers => {
-		return answers.pushBranch && git.status().then(status => {
-			return git.push('origin', status.current);
-		});
-	})
-	.then(() => inquirer.prompt([{
-		type: 'confirm',
-		message: 'Push tag?',
-		name: 'pushTag'
-	}]))
-	.then(answers => answers.pushTag && git.push('origin', selectedVersion))
-	.then(() => inquirer.prompt([{
-		type: 'confirm',
-		message: 'Set history to tag?',
-		name: 'pushTag'
-	}]))
-	.then(answers => {
-		const body = md({tag: selectedVersion, write: false, title: false});
-		return answers.pushTag && octokit.repos.getReleaseByTag({owner, repo, tag: selectedVersion})
-			.then((release) => {
+		const status = await git.status();
+
+		answers = await inquirer.prompt([{
+			type: 'checkbox',
+			message: 'Select files to commit?',
+			name: 'files',
+			choices: status.files.map(file => { return {name: `${ file.working_dir } ${ file.path }`, checked: true}; })
+		}]);
+
+		if (answers.files.length) {
+			await git.add(answers.files.map(file => file.slice(2)));
+
+			const options = [];
+
+			if (amend) {
+				options.push('--amend');
+			}
+
+			await git.commit(`Bump version to ${ this.version }`, options);
+		}
+	}
+
+	async shouldSetHistoryToGithubRelease() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: 'Set history to tag?',
+			name: 'pushTag'
+		}]);
+
+		const body = md({tag: this.version, write: false, title: false});
+		if (answers.pushTag) {
+			try {
+				const release = await octokit.repos.getReleaseByTag({owner: this.owner, repo: this.repo, tag: this.version});
 				console.log('Editing release');
-				octokit.repos.editRelease({owner, repo, id: release.data.id, tag_name: selectedVersion, body, name: selectedVersion, prerelease: selectedVersion.includes('-rc.')});
-			}).catch((error) => {
+				await octokit.repos.editRelease({owner: this.owner,
+					repo: this.repo,
+					id: release.data.id,
+					tag_name: this.version,
+					body,
+					name: this.version,
+					prerelease: this.version.includes('-rc.')
+				});
+			} catch (error) {
 				if (error.code === 404) {
 					console.log('Creating release');
-					return octokit.repos.createRelease({owner, repo, tag_name: selectedVersion, name: selectedVersion, body, draft: false, prerelease: selectedVersion.includes('-rc.')});
+					await octokit.repos.createRelease({owner: this.owner,
+						repo: this.repo,
+						tag_name: this.version,
+						name: this.version,
+						body,
+						draft: false,
+						prerelease: this.version.includes('-rc.')
+					});
 				}
-				return error;
+
+				throw error;
+			}
+		}
+	}
+
+	async shouldCreateDraftReleaseWithHistory({branch = 'master'} = {}) {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Create a GitHub draft release "${ this.version }"?`,
+			name: 'create'
+		}]);
+
+		const body = md({tag: this.version, write: false, title: false});
+		if (answers.create) {
+			console.log('Creating draft release');
+			await octokit.repos.createRelease({
+				owner: this.owner,
+				repo: this.repo,
+				tag_name: this.version,
+				target_commitish: branch,
+				name: this.version,
+				body,
+				draft: true,
+				prerelease: this.version.includes('-rc.')
 			});
-	})
-	.catch((error) => {
-		console.error(error);
-	});
+		}
+	}
+}
+
+const houston = new Houston();
+try {
+	houston.init();
+} catch (error) {
+	console.log(error);
+}
