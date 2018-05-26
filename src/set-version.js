@@ -244,7 +244,8 @@ class Houston {
 			try {
 				const release = await octokit.repos.getReleaseByTag({owner: this.owner, repo: this.repo, tag: this.version});
 				console.log('Editing release');
-				await octokit.repos.editRelease({owner: this.owner,
+				await octokit.repos.editRelease({
+					owner: this.owner,
 					repo: this.repo,
 					id: release.data.id,
 					tag_name: this.version,
@@ -255,7 +256,8 @@ class Houston {
 			} catch (error) {
 				if (error.code === 404) {
 					console.log('Creating release');
-					await octokit.repos.createRelease({owner: this.owner,
+					await octokit.repos.createRelease({
+						owner: this.owner,
 						repo: this.repo,
 						tag_name: this.version,
 						name: this.version,
@@ -263,9 +265,9 @@ class Houston {
 						draft: false,
 						prerelease: this.version.includes('-rc.')
 					});
+				} else {
+					throw error;
 				}
-
-				throw error;
 			}
 		}
 	}
