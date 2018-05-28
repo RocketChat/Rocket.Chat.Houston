@@ -1,5 +1,9 @@
 #! /usr/bin/env node
 
+const updateNotifier = require('update-notifier');
+const pkg = require('../package.json');
+updateNotifier({pkg}).notify();
+
 const program = require('commander');
 const logs = require('../src/logs');
 const md = require('../src/md');
