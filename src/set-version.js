@@ -53,6 +53,7 @@ class Houston {
 			throw new Error('Branch not synced or changes in files. Please run this only on clean stage.');
 		}
 
+		await this.fetch();
 		await this.getRemote();
 		await this.selectAction();
 	}
@@ -74,9 +75,15 @@ class Houston {
 			throw new Error('No git remote found');
 		}
 
+		// TODO: Allow select remote when more then one exists
+
 		const [, owner, repo] = remotes[0].match(/\/([^\/]+)\/([^\/]+)\.git$/);
 		this.owner = owner;
 		this.repo = repo;
+	}
+
+	async fetch() {
+		await git.fetch();
 	}
 
 	async currentBranch() {
@@ -134,7 +141,7 @@ class Houston {
 	}
 
 	async newReleaseCandidate() {
-		// @TODO Allow start from develop and ask for create the release-candidate branch
+		// TODO: Allow start from develop and ask for create the release-candidate branch
 		await this.goToBranch({branch: 'release-candidate', readVersion: true});
 		await this.shouldMergeFromTo({from: 'origin/develop', to: 'release-candidate'});
 		await this.selectVersionToUpdate({currentVersion: this.version, release: 'prerelease', identifier: 'rc'});
@@ -148,15 +155,9 @@ class Houston {
 	async newFinalRelease() {
 		await this.goToBranch({branch: 'release-candidate', readVersion: true});
 		await this.selectVersionToUpdate({currentVersion: this.version, release: 'patch'});
-		await this.goToBranch({branch: 'master'});
-		await this.pull();
+		await this.goToBranch({branch: 'master', pull: true});
 		await this.createAndGoToBranch({branch: `release-${ this.version }`});
-		try {
-			await this.shouldMergeFromTo({from: 'origin/release-candidate', to: `release-${ this.version }`});
-		} catch (error) {
-			console.log('Error while merging, please do it manually');
-			console.error(error);
-		}
+		await this.shouldMergeFromTo({from: 'origin/release-candidate', to: `release-${ this.version }`});
 		await this.updateVersionInFiles();
 		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
@@ -165,14 +166,14 @@ class Houston {
 	}
 
 	async newSyncRelease() {
-		await this.goToBranch({branch: 'master', readVersion: true});
+		await this.goToBranch({branch: 'master', pull: true, readVersion: true});
+		await this.goToBranch({branch: 'develop', pull: true});
 		await this.createAndGoToBranch({branch: 'develop-sync'});
-		// @TODO Allow run from master and create the branch develop-sync
-		// await this.shouldMergeFromTo({from: 'origin/master', to: 'develop-sync'});
+		await this.shouldMergeFromTo({from: 'origin/master', to: 'develop-sync'});
 		await this.selectVersionToUpdate({currentVersion: this.version, release: 'minor', suffix: '-develop'});
 		await this.updateVersionInFiles();
-		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
+		await this.shouldCreateDevelopSyncPullRequest();
 	}
 
 	async shouldPushTag() {
@@ -194,7 +195,7 @@ class Houston {
 			name: 'pushBranch'
 		}]);
 
-		return answers.pushBranch && await git.push('origin', status.current);
+		return answers.pushBranch && await git.push(['-u', 'origin', status.current]);
 	}
 
 	async shouldAddTag() {
@@ -210,11 +211,14 @@ class Houston {
 		}
 	}
 
-	async goToBranch({branch, readVersion = false}) {
+	async goToBranch({branch, readVersion = false, pull = false}) {
 		const currentBranch = await this.currentBranch();
 		if (currentBranch !== branch) {
 			console.log('Switching to branch', branch);
 			await git.checkout(branch);
+			if (pull) {
+				await this.pull();
+			}
 			if (readVersion) {
 				this.readVersionFromPackageJson();
 			}
@@ -253,7 +257,12 @@ class Houston {
 			name: 'merge'
 		}]);
 
-		return answers.merge && await git.mergeFromTo(from, to);
+		try {
+			return answers.merge && await git.mergeFromTo(from, to);
+		} catch (error) {
+			console.log('Error while merging, please do it manually');
+			console.error(error);
+		}
 	}
 
 	async selectVersionToUpdate({currentVersion, release, identifier, suffix = ''}) {
@@ -299,7 +308,7 @@ class Houston {
 
 	async updateHistory() {
 		await logs({headName: this.version/*, owner: this.owner, repo: this.repo*/});
-		md();
+		await md();
 		await this.shouldCommitFiles({amend: true});
 	}
 
@@ -343,7 +352,7 @@ class Houston {
 			name: 'pushTag'
 		}]);
 
-		const body = md({tag: this.version, write: false, title: false});
+		const body = await md({tag: this.version, write: false, title: false});
 		if (answers.pushTag) {
 			try {
 				const release = await octokit.repos.getReleaseByTag({owner: this.owner, repo: this.repo, tag: this.version});
@@ -383,7 +392,7 @@ class Houston {
 			name: 'create'
 		}]);
 
-		const body = md({tag: this.version, write: false, title: false});
+		const body = await md({tag: this.version, write: false, title: false});
 		if (answers.create) {
 			console.log('Creating draft release');
 			await octokit.repos.createRelease({
@@ -406,10 +415,10 @@ class Houston {
 			name: 'create'
 		}]);
 
-		const body = md({tag: this.version, write: false, title: false});
+		const body = await md({tag: this.version, write: false, title: false});
 		if (answers.create) {
 			console.log('Creating pull request');
-			await octokit.pullRequests.create({
+			const pr = await octokit.pullRequests.create({
 				owner: this.owner,
 				repo: this.repo,
 				title: `Release ${ this.version }`,
@@ -417,6 +426,33 @@ class Houston {
 				base: 'master',
 				body
 			});
+			if (pr.data) {
+				console.log(`Pull Request created: ${ pr.data.title }`);
+				console.log(pr.data.html_url);
+			}
+		}
+	}
+
+	async shouldCreateDevelopSyncPullRequest() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: 'Create a GitHub Pull Request for develop sync?',
+			name: 'create'
+		}]);
+
+		if (answers.create) {
+			console.log('Creating pull request');
+			const pr = await octokit.pullRequests.create({
+				owner: this.owner,
+				repo: this.repo,
+				title: `Merge master into develop & Set version to ${ this.version }`,
+				head: await this.currentBranch(),
+				base: 'develop'
+			});
+			if (pr.data) {
+				console.log(`Pull Request created: ${ pr.data.title }`);
+				console.log(pr.data.html_url);
+			}
 		}
 	}
 }
