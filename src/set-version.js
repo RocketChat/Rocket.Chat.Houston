@@ -13,14 +13,6 @@ octokit.authenticate({
 	token: process.env.GITHUB_TOKEN
 });
 
-let pkgJson = {};
-
-try {
-	pkgJson = require(path.resolve(process.cwd(), './package.json'));
-} catch (err) {
-	console.error('no root package.json found');
-}
-
 const files = [
 	'./package.json',
 	'./.sandstorm/sandstorm-pkgdef.capnp',
@@ -44,11 +36,30 @@ class Houston {
 		this.owner = owner;
 		this.repo = repo;
 		this.version = version;
+
+		if (!this.version) {
+			this.readVersionFromPackageJson();
+		}
+	}
+
+	readVersionFromPackageJson() {
+		const filePath = path.resolve(process.cwd(), './package.json');
+		const file = JSON.parse(fs.readFileSync(filePath));
+		this.version = file.version;
 	}
 
 	async init() {
+		if (!await this.isClean()) {
+			throw new Error('Branch not synced or changes in files. Please run this only on clean stage.');
+		}
+
 		await this.getRemote();
 		await this.selectAction();
+	}
+
+	async isClean() {
+		const {files, ahead, behind} = await git.status();
+		return files.length === 0 && ahead === 0 && behind === 0;
 	}
 
 	async getRemote() {
@@ -68,18 +79,54 @@ class Houston {
 		this.repo = repo;
 	}
 
-	async selectAction() {
-		const status = await git.status();
+	async currentBranch() {
+		const {current} = await git.status();
+		return current;
+	}
 
-		if (status.current === 'release-candidate') {
+	async selectAction() {
+		const branch = await this.currentBranch();
+		let defaultOption;
+
+		if (branch === 'release-candidate') {
+			defaultOption = 'release-candidate';
+		}
+
+		if (branch === 'master') {
+			defaultOption = 'develop-sync';
+		}
+
+		if (/release-\d+\.\d+\.\d+/.test(branch)) {
+			defaultOption = 'release';
+		}
+
+		if (branch === 'develop-sync') {
+			defaultOption = 'develop-sync';
+		}
+
+		const { answer } = await inquirer.prompt([{
+			type: 'list',
+			message: 'Which action you want to execute?',
+			name: 'answer',
+			default: defaultOption,
+			choices: [{
+				name: 'Release Candidate', value: 'release-candidate'
+			}, {
+				name: 'Final Release', value: 'release'
+			}, {
+				name: 'Develop Sync', value: 'develop-sync'
+			}]
+		}]);
+
+		if (answer === 'release-candidate') {
 			return await this.newReleaseCandidate();
 		}
 
-		if (/release-\d+\.\d+\.\d+/.test(status.current)) {
+		if (answer === 'release') {
 			return await this.newFinalRelease();
 		}
 
-		if (status.current === 'develop-sync') {
+		if (answer === 'develop-sync') {
 			return await this.newSyncRelease();
 		}
 
@@ -87,23 +134,44 @@ class Houston {
 	}
 
 	async newReleaseCandidate() {
+		// @TODO Allow start from develop and ask for create the release-candidate branch
+		await this.goToBranch({branch: 'release-candidate', readVersion: true});
 		await this.shouldMergeFromTo({from: 'origin/develop', to: 'release-candidate'});
-		await this.selectVersionToUpdate({currentVersion: pkgJson.version, release: 'prerelease', identifier: 'rc'});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'prerelease', identifier: 'rc'});
+		await this.updateVersionInFiles();
+		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
 		await this.shouldAddTag();
 		await this.shouldSetHistoryToGithubRelease();
 	}
 
 	async newFinalRelease() {
-		await this.selectVersionToUpdate({currentVersion: pkgJson.version, release: 'patch'});
+		await this.goToBranch({branch: 'release-candidate', readVersion: true});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'patch'});
+		await this.goToBranch({branch: 'master'});
+		await this.pull();
+		await this.createAndGoToBranch({branch: `release-${ this.version }`});
+		try {
+			await this.shouldMergeFromTo({from: 'origin/release-candidate', to: `release-${ this.version }`});
+		} catch (error) {
+			console.log('Error while merging, please do it manually');
+			console.error(error);
+		}
+		await this.updateVersionInFiles();
+		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
 		await this.shouldCreateDraftReleaseWithHistory();
+		await this.shouldCreateReleasePullRequest();
 	}
 
 	async newSyncRelease() {
+		await this.goToBranch({branch: 'master', readVersion: true});
+		await this.createAndGoToBranch({branch: 'develop-sync'});
 		// @TODO Allow run from master and create the branch develop-sync
-		await this.shouldMergeFromTo({from: 'origin/master', to: 'develop-sync'});
-		await this.selectVersionToUpdate({currentVersion: pkgJson.version, release: 'minor', suffix: '-develop'});
+		// await this.shouldMergeFromTo({from: 'origin/master', to: 'develop-sync'});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'minor', suffix: '-develop'});
+		await this.updateVersionInFiles();
+		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
 	}
 
@@ -142,6 +210,42 @@ class Houston {
 		}
 	}
 
+	async goToBranch({branch, readVersion = false}) {
+		const currentBranch = await this.currentBranch();
+		if (currentBranch !== branch) {
+			console.log('Switching to branch', branch);
+			await git.checkout(branch);
+			if (readVersion) {
+				this.readVersionFromPackageJson();
+			}
+		}
+	}
+
+	async pull() {
+		await git.pull();
+	}
+
+	async createAndGoToBranch({branch}) {
+		const branchs = (await git.branchLocal()).all;
+		if (branchs.includes(branch)) {
+			const answers = await inquirer.prompt([{
+				type: 'confirm',
+				message: `Branch ${ branch } already exists, should delete and recreate?`,
+				name: 'deleteBranch'
+			}]);
+
+			if (answers.deleteBranch) {
+				console.log('Deleting branch', branch);
+				await git.deleteLocalBranch(branch);
+			} else {
+				await this.goToBranch({branch});
+			}
+		} else {
+			console.log('Creating branch', branch);
+			await git.checkoutLocalBranch(branch);
+		}
+	}
+
 	async shouldMergeFromTo({from, to}) {
 		const answers = await inquirer.prompt([{
 			type: 'confirm',
@@ -156,7 +260,7 @@ class Houston {
 		const nextVersion = semver.inc(currentVersion, release, identifier) + suffix;
 		let answers = await inquirer.prompt([{
 			type: 'list',
-			message: `The current version is ${ pkgJson.version }. Update to version:`,
+			message: `The current version is ${ this.version }. Update to version:`,
 			name: 'version',
 			choices: [
 				nextVersion,
@@ -172,17 +276,15 @@ class Houston {
 		}
 
 		const { version } = answers;
+		this.oldVersion = this.version;
 		this.version = version;
-
-		await this.updateVersionInFiles();
-		await this.shouldCommitFiles();
-		await this.updateHistory();
+		return version;
 	}
 
 	async updateVersionInFiles() {
 		await Promise.all(files.map(async(file) => {
 			let data = await readFile(file, 'utf8');
-			data = data.replace(pkgJson.version, this.version);
+			data = data.replace(this.oldVersion, this.version);
 			if (file.includes('sandstorm-pkgdef.capnp')) {
 				data = data.replace(/appVersion\s=\s(\d+),\s\s#\sIncrement/, (s, number) => {
 					number = parseInt(number, 10);
@@ -191,6 +293,8 @@ class Houston {
 			}
 			return await writeFile(file, data, 'utf8');
 		}));
+
+		await this.shouldCommitFiles();
 	}
 
 	async updateHistory() {
@@ -294,11 +398,28 @@ class Houston {
 			});
 		}
 	}
+
+	async shouldCreateReleasePullRequest() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Create a GitHub Pull Request for release "${ this.version }"?`,
+			name: 'create'
+		}]);
+
+		const body = md({tag: this.version, write: false, title: false});
+		if (answers.create) {
+			console.log('Creating pull request');
+			await octokit.pullRequests.create({
+				owner: this.owner,
+				repo: this.repo,
+				title: `Release ${ this.version }`,
+				head: await this.currentBranch(),
+				base: 'master',
+				body
+			});
+		}
+	}
 }
 
 const houston = new Houston();
-try {
-	houston.init();
-} catch (error) {
-	console.log(error);
-}
+houston.init().catch(error => console.error(error));

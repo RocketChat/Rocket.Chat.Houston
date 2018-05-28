@@ -170,6 +170,7 @@ function sort(a, b) {
 module.exports = function({tag, write = true, title = true} = {}) {
 	let historyData = (() => {
 		try {
+			// @TODO: Change to readFile
 			return require(historyDataFile);
 		} catch (error) {
 			throw new Error(`File ${ historyDataFile } not found`);
@@ -178,6 +179,7 @@ module.exports = function({tag, write = true, title = true} = {}) {
 
 	let historyManualData = (() => {
 		try {
+			// @TODO: Change to readFile
 			return require(historyManualDataFile);
 		} catch (error) {
 			console.error(`File ${ historyManualDataFile } not found, ignoring manual entries`);
@@ -186,12 +188,16 @@ module.exports = function({tag, write = true, title = true} = {}) {
 	})();
 
 	if (tag) {
-		historyData = {
-			[tag]: historyData[tag] || []
-		};
-		historyManualData = {
-			[tag]: historyManualData[tag] || []
-		};
+		historyData = Object.entries(historyData).filter(([key]) => key.indexOf(tag) === 0).reduce((v, [key, value]) => {
+			v[key] = value;
+			return v;
+		}, {});
+		historyManualData = Object.entries(historyManualData).filter(([key]) => key.indexOf(tag) === 0).reduce((v, [key, value]) => {
+			v[key] = value;
+			return v;
+		}, {});
+		historyData[tag] = historyData[tag] || [];
+		historyManualData[tag] = historyManualData[tag] || [];
 	}
 
 	Object.keys(historyManualData).forEach(tag => {
