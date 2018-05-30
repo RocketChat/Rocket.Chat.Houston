@@ -1,7 +1,6 @@
-/* eslint object-shorthand: 0, prefer-template: 0 */
-
 const path = require('path');
 const fs = require('fs');
+const { promisify } = require('util');
 const semver = require('semver');
 const inquirer = require('inquirer');
 const git = require('simple-git/promise')(process.cwd());
@@ -13,19 +12,6 @@ octokit.authenticate({
 	type: 'token',
 	token: process.env.GITHUB_TOKEN
 });
-const owner = 'RocketChat';
-const repo = 'Rocket.Chat';
-
-let pkgJson = {};
-
-try {
-	pkgJson = require(path.resolve(
-		process.cwd(),
-		'./package.json'
-	));
-} catch (err) {
-	console.error('no root package.json found');
-}
 
 const files = [
 	'./package.json',
@@ -37,149 +23,439 @@ const files = [
 	'./.docker/Dockerfile.rhel',
 	'./packages/rocketchat-lib/rocketchat.info'
 ];
-const readFile = (file) => {
-	return new Promise((resolve, reject) => {
-		fs.readFile(file, 'utf8', (error, result) => {
-			if (error) {
-				return reject(error);
-			}
-			resolve(result);
-		});
-	});
-};
-const writeFile = (file, data) => {
-	return new Promise((resolve, reject) => {
-		fs.writeFile(file, data, 'utf8', (error, result) => {
-			if (error) {
-				return reject(error);
-			}
-			resolve(result);
-		});
-	});
-};
 
-let selectedVersion;
+const readFile = promisify(fs.readFile);
+const writeFile = promisify(fs.writeFile);
 
-git.status()
-	.then(status => {
-		if (status.current === 'release-candidate') {
-			return inquirer.prompt([{
+class Houston {
+	constructor({
+		owner,
+		repo,
+		version
+	} = {}) {
+		this.owner = owner;
+		this.repo = repo;
+		this.version = version;
+
+		if (!this.version) {
+			this.readVersionFromPackageJson();
+		}
+	}
+
+	readVersionFromPackageJson() {
+		const filePath = path.resolve(process.cwd(), './package.json');
+		const file = JSON.parse(fs.readFileSync(filePath));
+		this.version = file.version;
+	}
+
+	async init() {
+		if (!await this.isClean()) {
+			throw new Error('Branch not synced or changes in files. Please run this only on clean stage.');
+		}
+
+		await this.fetch();
+		await this.getRemote();
+		await this.selectAction();
+	}
+
+	async isClean() {
+		const {files, ahead, behind} = await git.status();
+		return files.length === 0 && ahead === 0 && behind === 0;
+	}
+
+	async getRemote() {
+		if (this.owner && this.repo) {
+			return;
+		}
+
+		let remotes = await git.listRemote(['--get-url']);
+		remotes = remotes.split(/\n/);
+
+		if (remotes.length === 0) {
+			throw new Error('No git remote found');
+		}
+
+		// TODO: Allow select remote when more then one exists
+
+		const [, owner, repo] = remotes[0].match(/\/([^\/]+)\/([^\/]+)\.git$/);
+		this.owner = owner;
+		this.repo = repo;
+	}
+
+	async fetch() {
+		await git.fetch();
+	}
+
+	async currentBranch() {
+		const {current} = await git.status();
+		return current;
+	}
+
+	async selectAction() {
+		const branch = await this.currentBranch();
+		let defaultOption;
+
+		if (branch === 'release-candidate') {
+			defaultOption = 'release-candidate';
+		}
+
+		if (branch === 'master') {
+			defaultOption = 'develop-sync';
+		}
+
+		if (/release-\d+\.\d+\.\d+/.test(branch)) {
+			defaultOption = 'release';
+		}
+
+		if (branch === 'develop-sync') {
+			defaultOption = 'develop-sync';
+		}
+
+		const { answer } = await inquirer.prompt([{
+			type: 'list',
+			message: 'Which action you want to execute?',
+			name: 'answer',
+			default: defaultOption,
+			choices: [{
+				name: 'Release Candidate', value: 'release-candidate'
+			}, {
+				name: 'Final Release', value: 'release'
+			}, {
+				name: 'Develop Sync', value: 'develop-sync'
+			}]
+		}]);
+
+		if (answer === 'release-candidate') {
+			return await this.newReleaseCandidate();
+		}
+
+		if (answer === 'release') {
+			return await this.newFinalRelease();
+		}
+
+		if (answer === 'develop-sync') {
+			return await this.newSyncRelease();
+		}
+
+		throw new Error(`No release action for branch ${ status.current }`);
+	}
+
+	async newReleaseCandidate() {
+		// TODO: Allow start from develop and ask for create the release-candidate branch
+		await this.goToBranch({branch: 'release-candidate', readVersion: true});
+		await this.shouldMergeFromTo({from: 'origin/develop', to: 'release-candidate'});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'prerelease', identifier: 'rc'});
+		await this.updateVersionInFiles();
+		await this.updateHistory();
+		await this.shouldPushCurrentBranch();
+		await this.shouldAddTag();
+		await this.shouldSetHistoryToGithubRelease();
+	}
+
+	async newFinalRelease() {
+		await this.goToBranch({branch: 'release-candidate', readVersion: true});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'patch'});
+		await this.goToBranch({branch: 'master', pull: true});
+		await this.createAndGoToBranch({branch: `release-${ this.version }`});
+		await this.shouldMergeFromTo({from: 'origin/release-candidate', to: `release-${ this.version }`});
+		await this.updateVersionInFiles();
+		await this.updateHistory();
+		await this.shouldPushCurrentBranch();
+		await this.shouldCreateDraftReleaseWithHistory();
+		await this.shouldCreateReleasePullRequest();
+	}
+
+	async newSyncRelease() {
+		await this.goToBranch({branch: 'master', pull: true, readVersion: true});
+		await this.goToBranch({branch: 'develop', pull: true});
+		await this.createAndGoToBranch({branch: 'develop-sync'});
+		await this.shouldMergeFromTo({from: 'origin/master', to: 'develop-sync'});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'minor', suffix: '-develop'});
+		await this.updateVersionInFiles();
+		await this.shouldPushCurrentBranch();
+		await this.shouldCreateDevelopSyncPullRequest();
+	}
+
+	async shouldPushTag() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: 'Push tag?',
+			name: 'pushTag'
+		}]);
+
+		return answers.pushTag && await git.push('origin', this.version);
+	}
+
+	async shouldPushCurrentBranch() {
+		const status = await git.status();
+
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Push ${ status.current } branch?`,
+			name: 'pushBranch'
+		}]);
+
+		return answers.pushBranch && await git.push(['-u', 'origin', status.current]);
+	}
+
+	async shouldAddTag() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Add tag ${ this.version }?`,
+			name: 'tag'
+		}]);
+
+		if (answers.tag) {
+			await git.addTag(this.version);
+			await this.shouldPushTag();
+		}
+	}
+
+	async goToBranch({branch, readVersion = false, pull = false}) {
+		const currentBranch = await this.currentBranch();
+		if (currentBranch !== branch) {
+			console.log('Switching to branch', branch);
+			await git.checkout(branch);
+			if (pull) {
+				await this.pull();
+			}
+			if (readVersion) {
+				this.readVersionFromPackageJson();
+			}
+		}
+	}
+
+	async pull() {
+		await git.pull();
+	}
+
+	async createAndGoToBranch({branch}) {
+		const branchs = (await git.branchLocal()).all;
+		if (branchs.includes(branch)) {
+			const answers = await inquirer.prompt([{
 				type: 'confirm',
-				message: 'Merge from develop?',
-				name: 'merge'
-			}])
-				.then(answers => answers.merge && git.mergeFromTo('origin/develop', 'release-candidate'))
-				.then(() => semver.inc(pkgJson.version, 'prerelease', 'rc'));
+				message: `Branch ${ branch } already exists, should delete and recreate?`,
+				name: 'deleteBranch'
+			}]);
+
+			if (answers.deleteBranch) {
+				console.log('Deleting branch', branch);
+				await git.deleteLocalBranch(branch);
+			} else {
+				await this.goToBranch({branch});
+			}
+		} else {
+			console.log('Creating branch', branch);
+			await git.checkoutLocalBranch(branch);
 		}
-		if (/release-\d+\.\d+\.\d+/.test(status.current)) {
-			return semver.inc(pkgJson.version, 'patch');
+	}
+
+	async shouldMergeFromTo({from, to}) {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Merge from ${ from }?`,
+			name: 'merge'
+		}]);
+
+		try {
+			return answers.merge && await git.mergeFromTo(from, to);
+		} catch (error) {
+			console.log('Error while merging, please do it manually');
+			console.error(error);
 		}
-		if (status.current === 'develop-sync') {
-			return semver.inc(pkgJson.version, 'minor') + '-develop';
-		}
-		return Promise.reject(`No release action for branch ${ status.current }`);
-	})
-	.then(nextVersion => inquirer.prompt([{
-		type: 'list',
-		message: `The current version is ${ pkgJson.version }. Update to version:`,
-		name: 'version',
-		choices: [
-			nextVersion,
-			'custom'
-		]
-	}]))
-	.then(answers => {
+	}
+
+	async selectVersionToUpdate({currentVersion, release, identifier, suffix = ''}) {
+		const nextVersion = semver.inc(currentVersion, release, identifier) + suffix;
+		let answers = await inquirer.prompt([{
+			type: 'list',
+			message: `The current version is ${ this.version }. Update to version:`,
+			name: 'version',
+			choices: [
+				nextVersion,
+				'custom'
+			]
+		}]);
+
 		if (answers.version === 'custom') {
-			return inquirer.prompt([{
+			answers = await inquirer.prompt([{
 				name: 'version',
 				message: 'Enter your custom version:'
 			}]);
 		}
-		return answers;
-	})
-	.then(({ version }) => {
-		selectedVersion = version;
-		return Promise.all(files.map(file => {
-			return readFile(file)
-				.then(data => {
-					data = data.replace(pkgJson.version, version);
-					if (file.includes('sandstorm-pkgdef.capnp')) {
-						data = data.replace(/appVersion\s=\s(\d+),\s\s#\sIncrement/, (s, number) => {
-							number = parseInt(number, 10);
-							return s.replace(number, ++number);
-						});
-					}
-					return writeFile(file, data);
+
+		const { version } = answers;
+		this.oldVersion = this.version;
+		this.version = version;
+		return version;
+	}
+
+	async updateVersionInFiles() {
+		await Promise.all(files.map(async(file) => {
+			let data = await readFile(file, 'utf8');
+			data = data.replace(this.oldVersion, this.version);
+			if (file.includes('sandstorm-pkgdef.capnp')) {
+				data = data.replace(/appVersion\s=\s(\d+),\s\s#\sIncrement/, (s, number) => {
+					number = parseInt(number, 10);
+					return s.replace(number, ++number);
 				});
-		})).then(() => version);
-	})
-	.then((version) => {
-		return logs({headName: version});
-	})
-	.then(() => {
-		md();
-		return inquirer.prompt([{
+			}
+			return await writeFile(file, data, 'utf8');
+		}));
+
+		await this.shouldCommitFiles();
+	}
+
+	async updateHistory() {
+		await logs({headName: this.version/*, owner: this.owner, repo: this.repo*/});
+		await md();
+		await this.shouldCommitFiles({amend: true});
+	}
+
+	async shouldCommitFiles({amend = false} = {}) {
+		let answers = await inquirer.prompt([{
 			type: 'confirm',
 			message: 'Commit files?',
 			name: 'commit'
 		}]);
-	})
-	.then(answers => {
+
 		if (!answers.commit) {
-			return Promise.reject(answers);
+			return;
 		}
 
-		return git.status();
-	})
-	.then(status => inquirer.prompt([{
-		type: 'checkbox',
-		message: 'Select files to commit?',
-		name: 'files',
-		choices: status.files.map(file => { return {name: `${ file.working_dir } ${ file.path }`, checked: true}; })
-	}]))
-	.then(answers => answers.files.length && git.add(answers.files.map(file => file.slice(2))))
-	.then(() => git.commit(`Bump version to ${ selectedVersion }`))
-	.then(() => inquirer.prompt([{
-		type: 'confirm',
-		message: `Add tag ${ selectedVersion }?`,
-		name: 'tag'
-	}]))
-	.then(answers => answers.tag && git.addTag(selectedVersion))
-	.then(() => inquirer.prompt([{
-		type: 'confirm',
-		message: 'Push branch?',
-		name: 'pushBranch'
-	}]))
-	.then(answers => {
-		return answers.pushBranch && git.status().then(status => {
-			return git.push('origin', status.current);
-		});
-	})
-	.then(() => inquirer.prompt([{
-		type: 'confirm',
-		message: 'Push tag?',
-		name: 'pushTag'
-	}]))
-	.then(answers => answers.pushTag && git.push('origin', selectedVersion))
-	.then(() => inquirer.prompt([{
-		type: 'confirm',
-		message: 'Set history to tag?',
-		name: 'pushTag'
-	}]))
-	.then(answers => {
-		const body = md({tag: selectedVersion, write: false, title: false});
-		return answers.pushTag && octokit.repos.getReleaseByTag({owner, repo, tag: selectedVersion})
-			.then((release) => {
+		const status = await git.status();
+
+		answers = await inquirer.prompt([{
+			type: 'checkbox',
+			message: 'Select files to commit?',
+			name: 'files',
+			choices: status.files.map(file => { return {name: `${ file.working_dir } ${ file.path }`, checked: true}; })
+		}]);
+
+		if (answers.files.length) {
+			await git.add(answers.files.map(file => file.slice(2)));
+
+			const options = [];
+
+			if (amend) {
+				options.push('--amend');
+			}
+
+			await git.commit(`Bump version to ${ this.version }`, options);
+		}
+	}
+
+	async shouldSetHistoryToGithubRelease() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: 'Set history to tag?',
+			name: 'pushTag'
+		}]);
+
+		const body = await md({tag: this.version, write: false, title: false});
+		if (answers.pushTag) {
+			try {
+				const release = await octokit.repos.getReleaseByTag({owner: this.owner, repo: this.repo, tag: this.version});
 				console.log('Editing release');
-				octokit.repos.editRelease({owner, repo, id: release.data.id, tag_name: selectedVersion, body, name: selectedVersion, prerelease: selectedVersion.includes('-rc.')});
-			}).catch((error) => {
+				await octokit.repos.editRelease({
+					owner: this.owner,
+					repo: this.repo,
+					id: release.data.id,
+					tag_name: this.version,
+					body,
+					name: this.version,
+					prerelease: this.version.includes('-rc.')
+				});
+			} catch (error) {
 				if (error.code === 404) {
 					console.log('Creating release');
-					return octokit.repos.createRelease({owner, repo, tag_name: selectedVersion, name: selectedVersion, body, draft: false, prerelease: selectedVersion.includes('-rc.')});
+					await octokit.repos.createRelease({
+						owner: this.owner,
+						repo: this.repo,
+						tag_name: this.version,
+						name: this.version,
+						body,
+						draft: false,
+						prerelease: this.version.includes('-rc.')
+					});
+				} else {
+					throw error;
 				}
-				return error;
+			}
+		}
+	}
+
+	async shouldCreateDraftReleaseWithHistory({branch = 'master'} = {}) {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Create a GitHub draft release "${ this.version }"?`,
+			name: 'create'
+		}]);
+
+		const body = await md({tag: this.version, write: false, title: false});
+		if (answers.create) {
+			console.log('Creating draft release');
+			await octokit.repos.createRelease({
+				owner: this.owner,
+				repo: this.repo,
+				tag_name: this.version,
+				target_commitish: branch,
+				name: this.version,
+				body,
+				draft: true,
+				prerelease: this.version.includes('-rc.')
 			});
-	})
-	.catch((error) => {
-		console.error(error);
-	});
+		}
+	}
+
+	async shouldCreateReleasePullRequest() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Create a GitHub Pull Request for release "${ this.version }"?`,
+			name: 'create'
+		}]);
+
+		const body = await md({tag: this.version, write: false, title: false});
+		if (answers.create) {
+			console.log('Creating pull request');
+			const pr = await octokit.pullRequests.create({
+				owner: this.owner,
+				repo: this.repo,
+				title: `Release ${ this.version }`,
+				head: await this.currentBranch(),
+				base: 'master',
+				body
+			});
+			if (pr.data) {
+				console.log(`Pull Request created: ${ pr.data.title }`);
+				console.log(pr.data.html_url);
+			}
+		}
+	}
+
+	async shouldCreateDevelopSyncPullRequest() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: 'Create a GitHub Pull Request for develop sync?',
+			name: 'create'
+		}]);
+
+		if (answers.create) {
+			console.log('Creating pull request');
+			const pr = await octokit.pullRequests.create({
+				owner: this.owner,
+				repo: this.repo,
+				title: `Merge master into develop & Set version to ${ this.version }`,
+				head: await this.currentBranch(),
+				base: 'develop'
+			});
+			if (pr.data) {
+				console.log(`Pull Request created: ${ pr.data.title }`);
+				console.log(pr.data.html_url);
+			}
+		}
+	}
+}
+
+const houston = new Houston();
+houston.init().catch(error => console.error(error));

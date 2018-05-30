@@ -1,6 +1,6 @@
 {
   "name": "@rocket.chat/houston",
-  "version": "0.6.0",
+  "version": "0.10.0",
   "description": "Rocket.Chat Command Line Tools",
   "main": "index.js",
   "repository": {
@@ -24,7 +24,8 @@
     "progress": "^2.0.0",
     "semver": "^5.5.0",
     "simple-git": "^1.92.0",
-    "underscore": "^1.9.0"
+    "underscore": "^1.9.0",
+    "update-notifier": "^2.5.0"
   },
   "bugs": {
     "url": "https://github.com/RocketChat/Rocket.Chat.Houston/issues"

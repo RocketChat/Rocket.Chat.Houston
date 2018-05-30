@@ -3,35 +3,19 @@ const fs = require('fs');
 const semver = require('semver');
 const _ = require('underscore');
 const execSync = require('child_process').execSync;
+const octokit = require('@octokit/rest')();
 
 const historyDataFile = path.join(process.cwd(), '.github/history.json');
 const historyManualDataFile = path.join(process.cwd(), '.github/history-manual.json');
 const historyFile = path.join(process.cwd(), 'HISTORY.md');
 
-// TODO: Get from github team members
-const nonContributors = [
-	'web-flow',
-	'Hudell',
-	'MarcosSpessatto',
-	'bernardoetrevisan',
-	'ggazzo',
-	'graywolf336',
-	'sampaiodiego',
-	'alexbrazier',
-	'engelgabriel',
-	'gdelavald',
-	'geekgonecrazy',
-	'ggazzo',
-	'graywolf336',
-	'karlprieb',
-	'marceloschmidt',
-	'MartinSchoeler',
-	'rafaelks',
-	'rodrigok',
-	'renatobecker',
-	'sampaiodiego',
-	'SeanPackham'
-];
+octokit.authenticate({
+	type: 'token',
+	token: process.env.GITHUB_TOKEN
+});
+
+const systemUsers = ['web-flow'];
+let nonContributors = [];
 
 const GroupNames = {
 	FIX: '### 🐛 Bug fixes',
@@ -77,7 +61,7 @@ function getLatestCommitDate() {
 	return execSync('git log --date=short --format=\'%ad\' -1').toString().replace(/\n/, '');
 }
 
-function getSummary(contributors, groupedPRs) {
+function getSummary(contributors, teamContributors, groupedPRs) {
 	const summary = [];
 
 	Object.keys(groupedPRs).forEach(group => {
@@ -86,8 +70,8 @@ function getSummary(contributors, groupedPRs) {
 		}
 	});
 
-	if (contributors.length) {
-		summary.push(`${ contributors.length } ${ SummaryNameEmoticons.contributor }`);
+	if (contributors.length + teamContributors.length) {
+		summary.push(`${ contributors.length + teamContributors.length } ${ SummaryNameEmoticons.contributor }`);
 	}
 
 	if (summary.length) {
@@ -115,7 +99,7 @@ function renderPRs(prs) {
 			data.push(`\n${ groupName }\n`);
 		}
 		prs.forEach(pr => {
-			let contributors = _.compact(_.difference(pr.contributors, nonContributors))
+			let contributors = _.compact(_.difference(pr.contributors, nonContributors, systemUsers))
 				.sort()
 				.map(contributor => `[@${ contributor }](https://github.com/${ contributor })`)
 				.join(' & ');
@@ -133,6 +117,10 @@ function renderPRs(prs) {
 	});
 
 	const contributors = _.compact(_.difference(prs.reduce((value, pr) => {
+		return _._.unique(value.concat(pr.contributors));
+	}, []), nonContributors, systemUsers));
+
+	const teamContributors = _.compact(_.intersection(prs.reduce((value, pr) => {
 		return _.unique(value.concat(pr.contributors));
 	}, []), nonContributors));
 
@@ -144,9 +132,17 @@ function renderPRs(prs) {
 		});
 	}
 
+	if (teamContributors.length) {
+		// TODO: Improve list like https://gist.github.com/paulmillr/2657075/
+		data.push('\n### 👩‍💻👨‍💻 Core Team 🤓\n');
+		teamContributors.sort().forEach(contributor => {
+			data.push(`- [@${ contributor }](https://github.com/${ contributor })`);
+		});
+	}
+
 	return {
 		data,
-		summary: getSummary(contributors, groupedPRs)
+		summary: getSummary(contributors, teamContributors, groupedPRs)
 	};
 }
 
@@ -167,10 +163,17 @@ function sort(a, b) {
 	return 0;
 }
 
-module.exports = function({tag, write = true, title = true} = {}) {
+module.exports = async function({tag, write = true, title = true} = {}) {
+	// TODO: Get org from repo
+	const membersResult = await octokit.orgs.getMembers({org: 'RocketChat', per_page: 100});
+	nonContributors = membersResult.data.map(i => i.login);
+	if (nonContributors.length === 100) {
+		console.log('Need to implement pagination for members list');
+	}
+
 	let historyData = (() => {
 		try {
-			return require(historyDataFile);
+			return JSON.parse(fs.readFileSync(historyDataFile).toString());
 		} catch (error) {
 			throw new Error(`File ${ historyDataFile } not found`);
 		}
@@ -178,7 +181,7 @@ module.exports = function({tag, write = true, title = true} = {}) {
 
 	let historyManualData = (() => {
 		try {
-			return require(historyManualDataFile);
+			return JSON.parse(fs.readFileSync(historyManualDataFile).toString());
 		} catch (error) {
 			console.error(`File ${ historyManualDataFile } not found, ignoring manual entries`);
 			return {};
@@ -186,12 +189,16 @@ module.exports = function({tag, write = true, title = true} = {}) {
 	})();
 
 	if (tag) {
-		historyData = {
-			[tag]: historyData[tag] || []
-		};
-		historyManualData = {
-			[tag]: historyManualData[tag] || []
-		};
+		historyData = Object.entries(historyData).filter(([key]) => key.indexOf(tag) === 0).reduce((v, [key, value]) => {
+			v[key] = value;
+			return v;
+		}, {});
+		historyManualData = Object.entries(historyManualData).filter(([key]) => key.indexOf(tag) === 0).reduce((v, [key, value]) => {
+			v[key] = value;
+			return v;
+		}, {});
+		historyData[tag] = historyData[tag] || [];
+		historyManualData[tag] = historyManualData[tag] || [];
 	}
 
 	Object.keys(historyManualData).forEach(tag => {
