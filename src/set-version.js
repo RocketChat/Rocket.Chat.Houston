@@ -77,7 +77,7 @@ class Houston {
 
 		// TODO: Allow select remote when more then one exists
 
-		const [, owner, repo] = remotes[0].match(/\/([^\/]+)\/([^\/]+)\.git$/);
+		const [, owner, repo] = String(remotes[0]).match(/[\/:]([^\/]+)\/([^\/]+)\.git$/);
 		this.owner = owner;
 		this.repo = repo;
 	}
