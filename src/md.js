@@ -171,9 +171,9 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 		console.log('Need to implement pagination for members list');
 	}
 
-	let historyData = (() => {
+	let historyDataReleases = (() => {
 		try {
-			return JSON.parse(fs.readFileSync(historyDataFile).toString());
+			return JSON.parse(fs.readFileSync(historyDataFile).toString()).releases;
 		} catch (error) {
 			throw new Error(`File ${ historyDataFile } not found`);
 		}
@@ -189,7 +189,7 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 	})();
 
 	if (tag) {
-		historyData = Object.entries(historyData).filter(([key]) => key.indexOf(tag) === 0).reduce((v, [key, value]) => {
+		historyDataReleases = Object.entries(historyDataReleases).filter(([key]) => key.indexOf(tag) === 0).reduce((v, [key, value]) => {
 			v[key] = value;
 			return v;
 		}, {});
@@ -197,60 +197,61 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 			v[key] = value;
 			return v;
 		}, {});
-		historyData[tag] = historyData[tag] || [];
+		historyDataReleases[tag] = historyDataReleases[tag] || {
+			pull_requests: []
+		};
 		historyManualData[tag] = historyManualData[tag] || [];
 	}
 
 	Object.keys(historyManualData).forEach(tag => {
-		historyData[tag] = historyData[tag] || [];
-		historyData[tag].unshift(...historyManualData[tag]);
-	});
-
-	Object.keys(historyData).forEach(tag => {
-		historyData[tag] = {
-			prs: historyData[tag],
-			rcs: []
+		historyDataReleases[tag] = historyDataReleases[tag] || {
+			pull_requests: []
 		};
+		historyDataReleases[tag].pull_requests.unshift(...historyManualData[tag]);
 	});
 
-	Object.keys(historyData).forEach(tag => {
+	Object.values(historyDataReleases).forEach(value => {
+		value.rcs = [];
+	});
+
+	Object.keys(historyDataReleases).forEach(tag => {
 		if (/-rc/.test(tag)) {
 			const mainTag = tag.replace(/-rc.*/, '');
-			historyData[mainTag] = historyData[mainTag] || {
+			historyDataReleases[mainTag] = historyDataReleases[mainTag] || {
 				noMainRelease: true,
-				prs: [],
+				pull_requests: [],
 				rcs: []
 			};
 
-			if (historyData[mainTag].noMainRelease) {
-				historyData[mainTag].rcs.push({
+			if (historyDataReleases[mainTag].noMainRelease) {
+				historyDataReleases[mainTag].rcs.push({
 					tag,
-					prs: historyData[tag].prs
+					pull_requests: historyDataReleases[tag].pull_requests
 				});
 			} else {
-				historyData[mainTag].prs.push(...historyData[tag].prs);
+				historyDataReleases[mainTag].pull_requests.push(...historyDataReleases[tag].pull_requests);
 			}
 
-			delete historyData[tag];
+			delete historyDataReleases[tag];
 		}
 	});
 
 	const file = [];
 
-	Object.keys(historyData).sort(sort).forEach(tag => {
-		const {prs, rcs} = historyData[tag];
+	Object.keys(historyDataReleases).sort(sort).forEach(tag => {
+		const {pull_requests, rcs, node_version, npm_version} = historyDataReleases[tag];
 
-		if (!prs.length && !rcs.length) {
+		if (!pull_requests.length && !rcs.length) {
 			return;
 		}
 
 		const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
 
-		const {data, summary} = renderPRs(prs);
+		const {data, summary} = renderPRs(pull_requests);
 
 		const tagText = tag === 'HEAD' ? 'Next' : tag;
 
-		if (historyData[tag].noMainRelease) {
+		if (historyDataReleases[tag].noMainRelease) {
 			if (title) {
 				file.push(`\n# ${ tagText } (Under Release Candidate Process)`);
 			}
@@ -259,20 +260,40 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 				file.push(`\n# ${ tagText }`);
 			}
 			file.push(`\`${ tagDate }${ summary }\``);
+
+			if (node_version || npm_version) {
+				file.push('\n### Engine versions');
+				if (node_version) {
+					file.push(`- Node: \`${ node_version }\``);
+				}
+				if (npm_version) {
+					file.push(`- NPM: \`${ npm_version }\``);
+				}
+			}
 		}
 
 		file.push(...data);
 
 		if (Array.isArray(rcs)) {
 			rcs.reverse().forEach(rc => {
-				const {data, summary} = renderPRs(rc.prs);
+				const {data, summary} = renderPRs(rc.pull_requests);
 
-				if (historyData[tag].noMainRelease) {
+				if (historyDataReleases[tag].noMainRelease) {
 					const tagDate = getTagDate(rc.tag) || getLatestCommitDate();
 					if (title) {
 						file.push(`\n## ${ rc.tag }`);
 					}
 					file.push(`\`${ tagDate }${ summary }\``);
+
+					if (node_version || npm_version) {
+						file.push('\n### Engine versions');
+						if (node_version) {
+							file.push(`- Node: \`${ node_version }\``);
+						}
+						if (npm_version) {
+							file.push(`- NPM: \`${ npm_version }\``);
+						}
+					}
 				}
 
 				file.push(...data);

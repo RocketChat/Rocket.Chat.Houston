@@ -10,6 +10,20 @@ const minTag = '0.55.0-rc.0';
 const commitRegexString = '(^Merge pull request #([0-9]+) from )|( \\(#([0-9]+)\\)$)';
 const commitRegex = new RegExp(commitRegexString);
 
+const https = require('https');
+
+function request(url) {
+	return new Promise((resolve, reject) => {
+		https.get(url, (res) => {
+
+			const data = [];
+			res.on('data', d => data.push(d));
+			res.on('end', () => resolve(Buffer.concat(data).toString()));
+
+		}).on('error', reject);
+	});
+}
+
 const historyDataFile = path.join(process.cwd(), '.github/history.json');
 
 let historyData = (() => {
@@ -17,9 +31,24 @@ let historyData = (() => {
 		return require(historyDataFile);
 	} catch (error) {
 		console.error(`File ${ historyDataFile } not found, start a empty one`);
-		return {};
+		return {
+			version: 1,
+			releases: {}
+		};
 	}
 })();
+
+if (!historyData.version) {
+	historyData = {
+		version: 1,
+		releases: Object.entries(historyData).reduce((result, [release, pull_requests]) => {
+			result[release] = {
+				pull_requests
+			};
+			return result;
+		}, {})
+	};
+}
 
 octokit.authenticate({
 	type: 'token',
@@ -53,6 +82,9 @@ function promiseRetryRateLimit(promiseFn, retryWait = 60000) {
 
 function getPRInfo(number, commit) {
 	function onError(error) {
+		if (error.code === 404) {
+			return;
+		}
 		console.error(commit, error);
 		process.exit(1);
 	}
@@ -60,6 +92,10 @@ function getPRInfo(number, commit) {
 	return promiseRetryRateLimit(() => octokit.pullRequests.get({owner, repo, number}))
 		.catch(onError)
 		.then(pr => {
+			if (pr === undefined) {
+				return;
+			}
+
 			const info = {
 				pr: number,
 				title: pr.data.title,
@@ -190,11 +226,33 @@ async function getTags() {
 
 async function getMissingTags() {
 	const tags = await getTags();
-	const missingTags = _.difference(Object.keys(tags), Object.keys(historyData));
+	const missingTags = _.difference(Object.keys(tags), Object.keys(historyData.releases));
 
 	missingTags.push('HEAD');
 
 	return _.pick(tags, missingTags);
+}
+
+async function getEngineVersions(version) {
+	const result = await git.show([`${ version }:.meteor/release`]);
+
+	if (!/^METEOR@(\d+\.){2}\d/.test(result)) {
+		return {};
+	}
+
+	const meteorVersion = result.replace(/\n|\s/g, '');
+
+	try {
+		const requestResult = await request(`https://raw.githubusercontent.com/meteor/meteor/release/${ meteorVersion }/scripts/build-dev-bundle-common.sh`);
+
+		return {
+			node_version: requestResult.match(/NODE_VERSION=((?:\d+\.){2}\d)/m)[1],
+			npm_version: requestResult.match(/NPM_VERSION=((?:\d+\.){2}\d)/m)[1]
+		};
+	} catch (error) {
+		console.log(error);
+		return {};
+	}
 }
 
 module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:_repo = 'Rocket.Chat'}) {
@@ -210,8 +268,10 @@ module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:
 			function loadMissingTag() {
 				if (!missingTags.length) {
 					if (headName !== 'HEAD') {
-						historyData[headName] = historyData.HEAD;
-						historyData.HEAD = [];
+						historyData.releases[headName] = historyData.releases.HEAD;
+						historyData.releases.HEAD = {
+							pull_requests: []
+						};
 					}
 					fs.writeFileSync(historyDataFile, JSON.stringify(historyData, null, 2));
 					resolve();
@@ -222,12 +282,19 @@ module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:
 				const from = item.before;
 				const to = item.tag;
 				console.log('Fetching data for tag:', to, `(from ${ from })`);
-				getPullRequests(from, to).then(prs => {
-					// console.log('  ', prs.length, 'item(s) found');
-					historyData = Object.assign(historyData, {
-						[to]: prs
+				getPullRequests(from, to).then(pull_requests => {
+					getEngineVersions(to).then(versions => {
+						pull_requests = _.compact(pull_requests);
+						// console.log('  ', pull_requests.length, 'item(s) found');
+						historyData.releases = Object.assign(historyData.releases, {
+							[to]: {
+								...versions,
+								pull_requests
+							}
+						});
+						fs.writeFileSync(historyDataFile, JSON.stringify(historyData, null, 2));
+						loadMissingTag();
 					});
-					loadMissingTag();
 				});
 			}
 
