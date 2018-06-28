@@ -6,7 +6,7 @@ This is our primary version of our internal tool to help us on the release proce
 It's an inteactive CLI app.
 
 ```
-npm i @rocket.chat/houston
+npm i -g @rocket.chat/houston
 ```
 
 Start release process
