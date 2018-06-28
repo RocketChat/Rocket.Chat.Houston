@@ -241,6 +241,8 @@ class Houston {
 			if (answers.deleteBranch) {
 				console.log('Deleting branch', branch);
 				await git.deleteLocalBranch(branch);
+				console.log('Creating branch', branch);
+				await git.checkoutLocalBranch(branch);
 			} else {
 				await this.goToBranch({branch});
 			}
