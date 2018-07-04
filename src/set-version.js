@@ -121,6 +121,8 @@ class Houston {
 			}, {
 				name: 'Final Release', value: 'release'
 			}, {
+				name: 'Final Release From Cherry Picks', value: 'release-from-cherry-picks'
+			}, {
 				name: 'Develop Sync', value: 'develop-sync'
 			}]
 		}]);
@@ -131,6 +133,10 @@ class Houston {
 
 		if (answer === 'release') {
 			return await this.newFinalRelease();
+		}
+
+		if (answer === 'release-from-cherry-picks') {
+			return await this.newFinalReleaseFromCherryPicks();
 		}
 
 		if (answer === 'develop-sync') {
@@ -158,6 +164,18 @@ class Houston {
 		await this.goToBranch({branch: 'master', pull: true});
 		await this.createAndGoToBranch({branch: `release-${ this.version }`});
 		await this.shouldMergeFromTo({from: 'origin/release-candidate', to: `release-${ this.version }`});
+		await this.updateVersionInFiles();
+		await this.updateHistory();
+		await this.shouldPushCurrentBranch();
+		await this.shouldCreateDraftReleaseWithHistory();
+		await this.shouldCreateReleasePullRequest();
+	}
+
+	async newFinalReleaseFromCherryPicks() {
+		await this.goToBranch({branch: 'master', pull: true, readVersion: true});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'patch'});
+		await this.createAndGoToBranch({branch: `release-${ this.version }`});
+		console.log('---\nExecute the cherry picks\n---');
 		await this.updateVersionInFiles();
 		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
