@@ -18,6 +18,7 @@ const systemUsers = ['web-flow'];
 let nonContributors = [];
 
 const GroupNames = {
+	IMPROVE: '### 🚀 Improvements',
 	FIX: '### 🐛 Bug fixes',
 	NEW: '### 🎉 New features',
 	BREAK: '### ⚠️ BREAKING CHANGES',
@@ -25,6 +26,7 @@ const GroupNames = {
 };
 
 const SummaryNameEmoticons = {
+	IMPROVE: '🚀',
 	FIX: '🐛',
 	NEW: '🎉',
 	BREAK: '️️️⚠️',
@@ -36,12 +38,13 @@ function groupPRs(prs) {
 	const groups = {
 		BREAK: [],
 		NEW: [],
+		IMPROVE: [],
 		FIX: [],
 		NOGROUP: []
 	};
 
 	prs.forEach(pr => {
-		const match = pr.title.match(/\[(FIX|NEW|BREAK)\]\s*(.+)/);
+		const match = pr.title.match(/\[(FIX|IMPROVE|NEW|BREAK)\]\s*(.+)/);
 		if (match) {
 			pr.title = match[2];
 			groups[match[1]].push(pr);
