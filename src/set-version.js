@@ -233,7 +233,12 @@ class Houston {
 		const currentBranch = await this.currentBranch();
 		if (currentBranch !== branch) {
 			console.log('Switching to branch', branch);
-			await git.checkout(branch);
+			const branchs = (await git.branchLocal()).all;
+			if (!branchs.includes(branch)) {
+				await git.checkoutLocalBranch(branch);
+			} else {
+				await git.checkout(branch);
+			}
 			if (pull) {
 				await this.pull();
 			}
