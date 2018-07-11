@@ -84,7 +84,17 @@ function getSummary(contributors, teamContributors, groupedPRs) {
 	return '';
 }
 
-function renderPRs(prs) {
+function renderPRs(prs, historyDataReleasesOriginal, tag) {
+	const otherTags = Object.keys(historyDataReleasesOriginal).filter(k => {
+		if (tag === 'HEAD') {
+			return true;
+		}
+		return k !== 'HEAD' && semver.lt(k, tag);
+	});
+
+	const olderReleases = otherTags.map(t => historyDataReleasesOriginal[t]);
+	prs = prs.filter(p => !olderReleases.some(r => r.pull_requests.some(p2 => p2.pr === p.pr)));
+
 	const data = [];
 	const groupedPRs = groupPRs(prs);
 
@@ -182,6 +192,8 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 		}
 	})();
 
+	const historyDataReleasesOriginal = historyDataReleases;
+
 	let historyManualData = (() => {
 		try {
 			return JSON.parse(fs.readFileSync(historyManualDataFile).toString());
@@ -250,7 +262,7 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 
 		const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
 
-		const {data, summary} = renderPRs(pull_requests);
+		const {data, summary} = renderPRs(pull_requests, historyDataReleasesOriginal, tag);
 
 		const tagText = tag === 'HEAD' ? 'Next' : tag;
 
@@ -279,7 +291,7 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 
 		if (Array.isArray(rcs)) {
 			rcs.reverse().forEach(rc => {
-				const {data, summary} = renderPRs(rc.pull_requests);
+				const {data, summary} = renderPRs(rc.pull_requests, historyDataReleasesOriginal, rc.tag);
 
 				if (historyDataReleases[tag].noMainRelease) {
 					const tagDate = getTagDate(rc.tag) || getLatestCommitDate();
