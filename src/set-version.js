@@ -80,6 +80,7 @@ class Houston {
 		const [, owner, repo] = String(remotes[0]).match(/[\/:]([^\/]+)\/([^\/]+)\.git$/);
 		this.owner = owner;
 		this.repo = repo;
+		console.log(`Working with repository ${ owner }/${ repo }`);
 	}
 
 	async fetch() {
@@ -124,6 +125,8 @@ class Houston {
 				name: 'Final Release From Cherry Picks', value: 'release-from-cherry-picks'
 			}, {
 				name: 'Develop Sync', value: 'develop-sync'
+			}, {
+				name: 'Create release issue', value: 'create-release-issue'
 			}]
 		}]);
 
@@ -143,7 +146,17 @@ class Houston {
 			return await this.newSyncRelease();
 		}
 
+		if (answer === 'create-release-issue') {
+			return await this.createReleaseIssue();
+		}
+
 		throw new Error(`No release action for branch ${ status.current }`);
+	}
+
+	async createReleaseIssue() {
+		await this.goToBranch({branch: 'develop', readVersion: true});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'patch'});
+		await this.createReleaseIssueOnGitHub();
 	}
 
 	async newReleaseCandidate() {
@@ -192,6 +205,29 @@ class Houston {
 		await this.updateVersionInFiles();
 		await this.shouldPushCurrentBranch();
 		await this.shouldCreateDevelopSyncPullRequest();
+	}
+
+	async createReleaseIssueOnGitHub() {
+		const filePath = '.github/ISSUE_TEMPLATE/release.md';
+		let body = await readFile(filePath, 'utf8');
+		body = body.replace(/\{version\}/g, this.version);
+		body = body.replace(/---(.|\n)+?---\n/m, '');
+
+		const { data: me } = await octokit.users.get({});
+
+		console.log('Creating release issue');
+		const issue = await octokit.issues.create({
+			owner: this.owner,
+			repo: this.repo,
+			title: `Release ${ this.version }`,
+			assignee: me.login,
+			// milestone
+			body
+		});
+		if (issue.data) {
+			console.log(`Issue created: ${ issue.data.title }`);
+			console.log(issue.data.html_url);
+		}
 	}
 
 	async shouldPushTag() {
