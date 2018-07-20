@@ -89,7 +89,7 @@ function renderPRs(prs, historyDataReleasesOriginal, tag) {
 		if (tag === 'HEAD') {
 			return true;
 		}
-		return k !== 'HEAD' && semver.lt(k, tag);
+		return k !== 'HEAD' && semver.lt(k, tag) && k.indexOf(tag) === -1;
 	});
 
 	const olderReleases = otherTags.map(t => historyDataReleasesOriginal[t]);
