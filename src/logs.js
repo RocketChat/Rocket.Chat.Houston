@@ -193,6 +193,10 @@ async function getPullRequests(from, to) {
 	});
 }
 
+async function getCurrentLatestTag() {
+	return (await git.raw(['describe', '--abbrev=0', '--tags'])).replace(/\n/, '');
+}
+
 async function getTags() {
 	let tags = await git.tags();
 
@@ -207,6 +211,9 @@ async function getTags() {
 		}
 		return 0;
 	});
+
+	const currentLatestTag = await getCurrentLatestTag();
+	tags = tags.filter(t => semver.gt(t, currentLatestTag));
 
 	tags.push('HEAD');
 
