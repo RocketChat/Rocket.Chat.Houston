@@ -213,7 +213,7 @@ async function getTags() {
 	});
 
 	const currentLatestTag = await getCurrentLatestTag();
-	tags = tags.filter(t => semver.gt(t, currentLatestTag));
+	tags = tags.filter(t => semver.lte(t, currentLatestTag));
 
 	tags.push('HEAD');
 
