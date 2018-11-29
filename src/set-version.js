@@ -288,6 +288,18 @@ class Houston {
 		await git.pull();
 	}
 
+	async shouldContinue() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: 'Do you want to continue?',
+			name: 'continue'
+		}]);
+
+		if (!answers.continue) {
+			process.exit();
+		}
+	}
+
 	async createAndGoToBranch({branch}) {
 		const branchs = (await git.branchLocal()).all;
 		if (branchs.includes(branch)) {
@@ -323,6 +335,7 @@ class Houston {
 		} catch (error) {
 			console.log('Error while merging, please do it manually');
 			console.error(error);
+			return this.shouldContinue();
 		}
 	}
 
