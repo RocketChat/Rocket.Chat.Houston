@@ -241,20 +241,33 @@ async function getMissingTags() {
 }
 
 async function getEngineVersions(version) {
-	const result = await git.show([`${ version }:.meteor/release`]);
+	let circleConfig = '';
+	try {
+		circleConfig = await git.show([`${ version }:.circleci/config.yml`]);
+	} catch (e) {
+		console.error(e);
+	}
 
-	if (!/^METEOR@(\d+\.){2}\d/.test(result)) {
+	let meteorRelease = '';
+	try {
+		meteorRelease = await git.show([`${ version }:.meteor/release`]);
+	} catch (e) {
+		console.error(e);
+	}
+
+	if (!/^METEOR@(\d+\.){1,2}\d/.test(meteorRelease)) {
 		return {};
 	}
 
-	const meteorVersion = result.replace(/\n|\s/g, '');
+	const meteorVersion = meteorRelease.replace(/\n|\s/g, '');
 
 	try {
 		const requestResult = await request(`https://raw.githubusercontent.com/meteor/meteor/release/${ meteorVersion }/scripts/build-dev-bundle-common.sh`);
 
 		return {
 			node_version: requestResult.match(/NODE_VERSION=((?:\d+\.){2}\d)/m)[1],
-			npm_version: requestResult.match(/NPM_VERSION=((?:\d+\.){2}\d)/m)[1]
+			npm_version: requestResult.match(/NPM_VERSION=((?:\d+\.){2}\d)/m)[1],
+			mongo_versions: _.uniq(circleConfig.match(/mongo:(\d.){1,2}\d/g)).map(i => i.replace('mongo:', ''))
 		};
 	} catch (error) {
 		console.log(error);
