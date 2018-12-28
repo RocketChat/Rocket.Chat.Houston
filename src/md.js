@@ -178,7 +178,7 @@ function sort(a, b) {
 
 module.exports = async function({tag, write = true, title = true} = {}) {
 	// TODO: Get org from repo
-	const membersResult = await octokit.orgs.getMembers({org: 'RocketChat', per_page: 100});
+	const membersResult = await octokit.orgs.listMembers({org: 'RocketChat', per_page: 100});
 	nonContributors = membersResult.data.map(i => i.login);
 	if (nonContributors.length === 100) {
 		console.log('Need to implement pagination for members list');
@@ -254,7 +254,7 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 	const file = [];
 
 	Object.keys(historyDataReleases).sort(sort).forEach(tag => {
-		const {pull_requests, rcs, node_version, npm_version} = historyDataReleases[tag];
+		const {pull_requests, rcs, node_version, npm_version, mongo_versions} = historyDataReleases[tag];
 
 		if (!pull_requests.length && !rcs.length) {
 			return;
@@ -276,13 +276,16 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 			}
 			file.push(`\`${ tagDate }${ summary }\``);
 
-			if (node_version || npm_version) {
+			if (node_version || npm_version || mongo_versions) {
 				file.push('\n### Engine versions');
 				if (node_version) {
 					file.push(`- Node: \`${ node_version }\``);
 				}
 				if (npm_version) {
 					file.push(`- NPM: \`${ npm_version }\``);
+				}
+				if (mongo_versions) {
+					file.push(`- MongoDB: \`${ mongo_versions.join(', ') }\``);
 				}
 			}
 		}
