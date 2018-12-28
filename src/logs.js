@@ -107,7 +107,7 @@ function getPRInfo(number, commit) {
 				info.milestone = pr.data.milestone.title;
 			}
 
-			return promiseRetryRateLimit(() => octokit.pullRequests.getCommits({owner, repo, number}))
+			return promiseRetryRateLimit(() => octokit.pullRequests.listCommits({owner, repo, number}))
 				.catch(onError)
 				.then(commits => {
 					info.contributors = _.unique(_.flatten(commits.data.map(i => {

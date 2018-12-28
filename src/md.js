@@ -178,7 +178,7 @@ function sort(a, b) {
 
 module.exports = async function({tag, write = true, title = true} = {}) {
 	// TODO: Get org from repo
-	const membersResult = await octokit.orgs.getMembers({org: 'RocketChat', per_page: 100});
+	const membersResult = await octokit.orgs.listMembers({org: 'RocketChat', per_page: 100});
 	nonContributors = membersResult.data.map(i => i.login);
 	if (nonContributors.length === 100) {
 		console.log('Need to implement pagination for members list');
