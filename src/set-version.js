@@ -13,16 +13,7 @@ octokit.authenticate({
 	token: process.env.GITHUB_TOKEN
 });
 
-const files = [
-	'./package.json',
-	'./.sandstorm/sandstorm-pkgdef.capnp',
-	'./.travis/snap.sh',
-	'./.circleci/snap.sh',
-	'./.circleci/update-releases.sh',
-	'./.docker/Dockerfile',
-	'./.docker/Dockerfile.rhel',
-	'./packages/rocketchat-lib/rocketchat.info'
-];
+const files = [];
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
@@ -53,6 +44,7 @@ class Houston {
 			throw new Error('Branch not synced or changes in files. Please run this only on clean stage.');
 		}
 
+		await this.readConfig();
 		await this.fetch();
 		await this.getRemote();
 		await this.selectAction();
@@ -61,6 +53,20 @@ class Houston {
 	async isClean() {
 		const {files, ahead, behind} = await git.status();
 		return files.length === 0 && ahead === 0 && behind === 0;
+	}
+
+	// read repo config
+	async readConfig() {
+		const filePath = path.resolve(process.cwd(), './package.json');
+		const file = JSON.parse(fs.readFileSync(filePath));
+		if (!file.houston) {
+			return;
+		}
+		if (file.updateFiles) {
+			file.updateFiles.forEach((file) => {
+				files.push(file);
+			});
+		}
 	}
 
 	async getRemote() {
@@ -189,6 +195,7 @@ class Houston {
 		await this.selectVersionToUpdate({currentVersion: this.version, release: 'patch'});
 		await this.createAndGoToBranch({branch: `release-${ this.version }`});
 		console.log('---\nExecute the cherry picks\n---');
+		await this.shouldContinue();
 		await this.updateVersionInFiles();
 		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
@@ -366,7 +373,7 @@ class Houston {
 
 	async updateVersionInFiles() {
 		await Promise.all(files.map(async(file) => {
-			let data = await readFile(file, 'utf8');
+			let data = await readFile(`./${ file }`, 'utf8');
 			data = data.replace(this.oldVersion, this.version);
 			if (file.includes('sandstorm-pkgdef.capnp')) {
 				data = data.replace(/appVersion\s=\s(\d+),\s\s#\sIncrement/, (s, number) => {
