@@ -124,6 +124,8 @@ class Houston {
 			name: 'answer',
 			default: defaultOption,
 			choices: [{
+				name: 'Beta Release', value: 'beta-release'
+			}, {
 				name: 'Release Candidate', value: 'release-candidate'
 			}, {
 				name: 'Final Release', value: 'release'
@@ -138,6 +140,10 @@ class Houston {
 
 		if (answer === 'release-candidate') {
 			return await this.newReleaseCandidate();
+		}
+
+		if (answer === 'beta-release') {
+			return await this.newBetaRelease();
 		}
 
 		if (answer === 'release') {
@@ -170,6 +176,18 @@ class Houston {
 		await this.goToBranch({branch: 'release-candidate', readVersion: true});
 		await this.shouldMergeFromTo({from: 'origin/develop', to: 'release-candidate'});
 		await this.selectVersionToUpdate({currentVersion: this.version, release: 'prerelease', identifier: 'rc'});
+		await this.updateVersionInFiles();
+		await this.updateHistory();
+		await this.shouldPushCurrentBranch();
+		await this.shouldAddTag();
+		await this.shouldSetHistoryToGithubRelease();
+	}
+
+	async newBetaRelease() {
+		// TODO: Allow start from develop and ask for create the release-candidate branch
+		await this.goToBranch({branch: 'beta-release', readVersion: true});
+		await this.shouldMergeFromTo({from: 'origin/develop', to: 'beta-release'});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'prerelease', identifier: 'beta'});
 		await this.updateVersionInFiles();
 		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
