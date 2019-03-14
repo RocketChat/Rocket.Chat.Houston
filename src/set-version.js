@@ -44,7 +44,6 @@ class Houston {
 			throw new Error('Branch not synced or changes in files. Please run this only on clean stage.');
 		}
 
-		await this.readConfig();
 		await this.fetch();
 		await this.getRemote();
 		await this.selectAction();
@@ -62,8 +61,9 @@ class Houston {
 		if (!file.houston) {
 			return;
 		}
-		if (file.updateFiles) {
-			file.updateFiles.forEach((file) => {
+		const { houston } = file;
+		if (houston.updateFiles) {
+			houston.updateFiles.forEach((file) => {
 				files.push(file);
 			});
 		}
@@ -390,6 +390,8 @@ class Houston {
 	}
 
 	async updateVersionInFiles() {
+		await this.readConfig();
+
 		await Promise.all(files.map(async(file) => {
 			let data = await readFile(`./${ file }`, 'utf8');
 			data = data.replace(this.oldVersion, this.version);
