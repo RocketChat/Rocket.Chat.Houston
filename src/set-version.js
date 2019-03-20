@@ -180,7 +180,7 @@ class Houston {
 		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
 		await this.shouldAddTag();
-		await this.shouldSetHistoryToGithubRelease();
+		await this.shouldSetHistoryToGithubRelease(true);
 	}
 
 	async newBetaRelease() {
@@ -192,7 +192,7 @@ class Houston {
 		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
 		await this.shouldAddTag();
-		await this.shouldSetHistoryToGithubRelease();
+		await this.shouldSetHistoryToGithubRelease(true);
 	}
 
 	async newFinalRelease() {
@@ -446,7 +446,7 @@ class Houston {
 		}
 	}
 
-	async shouldSetHistoryToGithubRelease() {
+	async shouldSetHistoryToGithubRelease(prerelease = false) {
 		const answers = await inquirer.prompt([{
 			type: 'confirm',
 			message: 'Set history to tag?',
@@ -465,7 +465,7 @@ class Houston {
 					tag_name: this.version,
 					body,
 					name: this.version,
-					prerelease: this.version.includes('-rc.')
+					prerelease
 				});
 			} catch (error) {
 				if (error.code === 404) {
@@ -477,7 +477,7 @@ class Houston {
 						name: this.version,
 						body,
 						draft: false,
-						prerelease: this.version.includes('-rc.')
+						prerelease
 					});
 				} else {
 					throw error;
