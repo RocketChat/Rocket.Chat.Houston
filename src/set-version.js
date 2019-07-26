@@ -290,26 +290,65 @@ class Houston {
 		}
 	}
 
-	async goToBranch({branch, readVersion = false, pull = false}) {
+	async checkoutBranch({branch, askToChange = true}) {
 		const currentBranch = await this.currentBranch();
-		if (currentBranch !== branch) {
-			console.log('Switching to branch', branch);
-			const branchs = (await git.branchLocal()).all;
-			if (!branchs.includes(branch)) {
-				await git.checkoutLocalBranch(branch);
-			} else {
-				await git.checkout(branch);
+		if (currentBranch === branch) {
+			return;
+		}
+
+		if (askToChange) {
+			const { answer } = await inquirer.prompt([{
+				type: 'list',
+				message: `You\'re not on branch ${ branch }. Would you?`,
+				name: 'answer',
+				default: 'change',
+				choices: [{
+					name: `Change to ${ branch }`,
+					value: 'change'
+				}, {
+					name: 'Continue from here',
+					value: 'continue'
+				}]
+			}]);
+
+			if (answer === 'continue') {
+				return;
 			}
-			if (pull) {
-				await this.pull();
-			}
-			if (readVersion) {
-				this.readVersionFromPackageJson();
-			}
+		}
+
+		console.log('Switching to branch', branch);
+
+		const localBranch = await git.branchLocal();
+		if (!localBranch.all.includes(branch)) {
+			return git.checkoutLocalBranch(branch);
+		}
+
+		git.checkout(branch);
+	}
+
+	async goToBranch({branch, readVersion = false, pull = false, askToChange = true}) {
+		await this.checkoutBranch({branch, askToChange});
+
+		if (pull) {
+			await this.pull();
+		}
+
+		if (readVersion) {
+			this.readVersionFromPackageJson();
 		}
 	}
 
 	async pull() {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: 'Pull from origin?',
+			name: 'pull'
+		}]);
+
+		if (!answers.pull) {
+			return;
+		}
+
 		await git.pull();
 	}
 
