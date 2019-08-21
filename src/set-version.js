@@ -267,7 +267,7 @@ class Houston {
 			name: 'pushTag'
 		}]);
 
-		return answers.pushTag && await git.push(['-u', 'origin', this.version, ...PUSH_TAG_OPTIONS.split(' ')]);
+		return answers.pushTag && await git.push(['-u', 'origin', this.version, ...PUSH_TAG_OPTIONS.split(' ').filter(i => i)]);
 	}
 
 	async shouldPushCurrentBranch() {
@@ -279,7 +279,7 @@ class Houston {
 			name: 'pushBranch'
 		}]);
 
-		return answers.pushBranch && await git.push(['-u', 'origin', status.current, ...PUSH_CURRENT_BRANCH_OPTIONS.split(' ')]);
+		return answers.pushBranch && await git.push(['-u', 'origin', status.current, ...PUSH_CURRENT_BRANCH_OPTIONS.split(' ').filter(i => i)]);
 	}
 
 	async shouldAddTag() {
