@@ -18,6 +18,11 @@ const files = [];
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 
+const {
+	PUSH_TAG_OPTIONS = '',
+	PUSH_CURRENT_BRANCH_OPTIONS = ''
+} = process.env;
+
 class Houston {
 	constructor({
 		owner,
@@ -262,7 +267,7 @@ class Houston {
 			name: 'pushTag'
 		}]);
 
-		return answers.pushTag && await git.push('origin', this.version);
+		return answers.pushTag && await git.push(['-u', 'origin', this.version, ...PUSH_TAG_OPTIONS.split(' ').filter(i => i)]);
 	}
 
 	async shouldPushCurrentBranch() {
@@ -274,7 +279,7 @@ class Houston {
 			name: 'pushBranch'
 		}]);
 
-		return answers.pushBranch && await git.push(['-u', 'origin', status.current]);
+		return answers.pushBranch && await git.push(['-u', 'origin', status.current, ...PUSH_CURRENT_BRANCH_OPTIONS.split(' ').filter(i => i)]);
 	}
 
 	async shouldAddTag() {
