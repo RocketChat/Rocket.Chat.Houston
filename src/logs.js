@@ -63,7 +63,13 @@ function promiseRetryRateLimit(promiseFn, retryWait = 60000) {
 			promiseFn()
 				.then(data => resolve(data))
 				.catch(error => {
-					if (error.headers['x-ratelimit-remaining'] === '0') {
+					if (error.headers['status'] === '403 Forbidden' && error.headers['retry-after']) {
+						const reset = error.headers['retry-after'];
+
+						console.error('Retrying in', reset, 'seconds');
+						console.log('Retrying in', reset, 'seconds');
+						setTimeout(exec, reset * 1000);
+					} else if (error.headers['x-ratelimit-remaining'] === '0') {
 						let reset = error.headers['x-ratelimit-reset'];
 						if (reset) {
 							reset = parseInt(reset) * 1000 - Date.now();
