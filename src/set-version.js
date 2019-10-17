@@ -5,12 +5,11 @@ const semver = require('semver');
 const inquirer = require('inquirer');
 const git = require('simple-git/promise')(process.cwd());
 const logs = require('./logs');
-const octokit = require('@octokit/rest')();
+const Octokit = require('@octokit/rest');
 const md = require('../src/md');
 
-octokit.authenticate({
-	type: 'token',
-	token: process.env.GITHUB_TOKEN
+const octokit = new Octokit({
+	auth: process.env.GITHUB_TOKEN
 });
 
 const files = [];

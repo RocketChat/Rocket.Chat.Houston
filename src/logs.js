@@ -4,7 +4,7 @@ const semver = require('semver');
 const ProgressBar = require('progress');
 const _ = require('underscore');
 const git = require('simple-git/promise')(process.cwd());
-const octokit = require('@octokit/rest')();
+const Octokit = require('@octokit/rest');
 
 const minTag = '0.55.0-rc.0';
 const commitRegexString = '(^Merge pull request #([0-9]+) from )|( \\(#([0-9]+)\\)$)';
@@ -50,10 +50,10 @@ if (!historyData.version) {
 	};
 }
 
-octokit.authenticate({
-	type: 'token',
-	token: process.env.GITHUB_TOKEN
+const octokit = new Octokit({
+	auth: process.env.GITHUB_TOKEN
 });
+
 let owner = 'RocketChat';
 let repo = 'Rocket.Chat';
 
@@ -95,7 +95,7 @@ function getPRInfo(number, commit) {
 		process.exit(1);
 	}
 
-	return promiseRetryRateLimit(() => octokit.pullRequests.get({owner, repo, number}))
+	return promiseRetryRateLimit(() => octokit.pullRequests.get({owner, repo, pull_number: number}))
 		.catch(onError)
 		.then(pr => {
 			if (pr === undefined) {
@@ -113,7 +113,7 @@ function getPRInfo(number, commit) {
 				info.milestone = pr.data.milestone.title;
 			}
 
-			return promiseRetryRateLimit(() => octokit.pullRequests.listCommits({owner, repo, number}))
+			return promiseRetryRateLimit(() => octokit.pullRequests.listCommits({owner, repo, pull_number: number}))
 				.catch(onError)
 				.then(commits => {
 					info.contributors = _.unique(_.flatten(commits.data.map(i => {

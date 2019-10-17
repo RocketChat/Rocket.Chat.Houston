@@ -3,15 +3,14 @@ const fs = require('fs');
 const semver = require('semver');
 const _ = require('underscore');
 const execSync = require('child_process').execSync;
-const octokit = require('@octokit/rest')();
+const Octokit = require('@octokit/rest');
 
 const historyDataFile = path.join(process.cwd(), '.github/history.json');
 const historyManualDataFile = path.join(process.cwd(), '.github/history-manual.json');
 const historyFile = path.join(process.cwd(), 'HISTORY.md');
 
-octokit.authenticate({
-	type: 'token',
-	token: process.env.GITHUB_TOKEN
+const octokit = new Octokit({
+	auth: process.env.GITHUB_TOKEN
 });
 
 const systemUsers = ['web-flow'];
