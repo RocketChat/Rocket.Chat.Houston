@@ -511,7 +511,7 @@ class Houston {
 					prerelease
 				});
 			} catch (error) {
-				if (error.code === 404) {
+				if (error.status === 404) {
 					console.log('Creating release');
 					await octokit.repos.createRelease({
 						owner: this.owner,

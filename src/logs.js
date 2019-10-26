@@ -88,7 +88,7 @@ function promiseRetryRateLimit(promiseFn, retryWait = 60000) {
 
 function getPRInfo(number, commit) {
 	function onError(error) {
-		if (error.code === 404) {
+		if (error.status === 404) {
 			return;
 		}
 		console.error(commit, error);
