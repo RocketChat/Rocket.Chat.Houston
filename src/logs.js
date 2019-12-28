@@ -246,42 +246,7 @@ async function getMissingTags() {
 	return _.pick(tags, missingTags);
 }
 
-async function getEngineVersions(version) {
-	let circleConfig = '';
-	try {
-		circleConfig = await git.show([`${ version }:.circleci/config.yml`]);
-	} catch (e) {
-		console.error(e);
-	}
-
-	let meteorRelease = '';
-	try {
-		meteorRelease = await git.show([`${ version }:.meteor/release`]);
-	} catch (e) {
-		console.error(e);
-	}
-
-	if (!/^METEOR@(\d+\.){1,2}\d/.test(meteorRelease)) {
-		return {};
-	}
-
-	const meteorVersion = meteorRelease.replace(/\n|\s/g, '');
-
-	try {
-		const requestResult = await request(`https://raw.githubusercontent.com/meteor/meteor/release/${ meteorVersion }/scripts/build-dev-bundle-common.sh`);
-
-		return {
-			node_version: requestResult.match(/NODE_VERSION=((?:\d+\.){2}\d)/m)[1],
-			npm_version: requestResult.match(/NPM_VERSION=((?:\d+\.){2}\d)/m)[1],
-			mongo_versions: _.uniq(circleConfig.match(/mongo:(\d.){1,2}\d/g)).map(i => i.replace('mongo:', ''))
-		};
-	} catch (error) {
-		console.log(error);
-		return {};
-	}
-}
-
-module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:_repo = 'Rocket.Chat'}) {
+module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:_repo = 'Rocket.Chat', getMetadata = () => Promise.resolve({}) }) {
 	owner = _owner;
 	repo = _repo;
 
@@ -309,12 +274,12 @@ module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:
 				const to = item.tag;
 				console.log('Fetching data for tag:', to, `(from ${ from })`);
 				getPullRequests(from, to).then(pull_requests => {
-					getEngineVersions(to).then(versions => {
+					getMetadata({ version: to, git, request }).then(metadata => {
 						pull_requests = _.compact(pull_requests);
 						// console.log('  ', pull_requests.length, 'item(s) found');
 						historyData.releases = Object.assign(historyData.releases, {
 							[to]: {
-								...versions,
+								...metadata,
 								pull_requests
 							}
 						});

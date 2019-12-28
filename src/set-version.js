@@ -33,6 +33,8 @@ class Houston {
 		this.repo = repo;
 		this.version = version;
 
+		this.getMetadata = () => Promise.resolve({});
+
 		if (!this.version) {
 			this.readVersionFromPackageJson();
 		}
@@ -71,6 +73,10 @@ class Houston {
 			houston.updateFiles.forEach((file) => {
 				files.push(file);
 			});
+		}
+
+		if (houston.metadata) {
+			this.getMetadata = require(path.resolve(process.cwd(), houston.metadata));
 		}
 	}
 
@@ -452,7 +458,7 @@ class Houston {
 	}
 
 	async updateHistory() {
-		await logs({headName: this.version/*, owner: this.owner, repo: this.repo*/});
+		await logs({headName: this.version, getMetadata: this.getMetadata /*, owner: this.owner, repo: this.repo*/});
 		await md();
 		await this.shouldCommitFiles({amend: true});
 	}
