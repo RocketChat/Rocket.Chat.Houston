@@ -93,7 +93,7 @@ function renderPRs(prs, historyDataReleasesOriginal, tag) {
 	});
 
 	const olderReleases = otherTags.map(t => historyDataReleasesOriginal[t]);
-	prs = prs.filter(p => !olderReleases.some(r => r.pull_requests.some(p2 => p2.pr === p.pr)));
+	prs = prs.filter(p => p.manual || !olderReleases.some(r => r.pull_requests.some(p2 => p2.pr === p.pr)));
 
 	const data = [];
 	const groupedPRs = groupPRs(prs);
@@ -222,7 +222,7 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 		historyDataReleases[tag] = historyDataReleases[tag] || {
 			pull_requests: []
 		};
-		historyDataReleases[tag].pull_requests.unshift(...historyManualData[tag]);
+		historyDataReleases[tag].pull_requests.unshift(...historyManualData[tag].map((pr) => ({ manual: true, ...pr })));
 	});
 
 	Object.values(historyDataReleases).forEach(value => {
