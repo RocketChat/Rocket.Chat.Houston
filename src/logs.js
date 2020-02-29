@@ -92,7 +92,7 @@ function extractDescription(body) {
 		return;
 	}
 
-	return match.groups.description.replace(/<!--.*?-->\r?\n?/gs, '').replace(/(\r?\n)*$/gs, '');
+	return match.groups.description.replace(/<!--.*?-->\r?\n?/gs, '').replace(/(\r?\n)*$/gs, '').trim();
 }
 
 function getPRInfo(number, commit) {
