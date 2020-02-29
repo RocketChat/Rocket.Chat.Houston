@@ -86,6 +86,15 @@ function promiseRetryRateLimit(promiseFn, retryWait = 60000) {
 	});
 }
 
+function extractDescription(body) {
+	const match = body.match(/<!-- CHANGELOG -->\r?\n?(?<description>.*)\r?\n?<!-- END CHANGELOG -->/s);
+	if (!match || !match.groups || !match.groups.description) {
+		return;
+	}
+
+	return match.groups.description.replace(/<!--.*?-->\r?\n?/gs, '').replace(/(\r?\n)*$/gs, '');
+}
+
 function getPRInfo(number, commit) {
 	function onError(error) {
 		if (error.code === 404) {
@@ -107,6 +116,13 @@ function getPRInfo(number, commit) {
 				title: pr.data.title,
 				userLogin: pr.data.user.login
 			};
+
+			if (typeof pr.data.body === 'string') {
+				const description = extractDescription(pr.data.body);
+				if (description) {
+					info.description = description;
+				}
+			}
 			// data.author_association: 'CONTRIBUTOR',
 
 			if (pr.data.milestone) {
@@ -129,7 +145,7 @@ function getPRInfo(number, commit) {
 		});
 }
 
-function getPRNumeberFromMessage(message, item) {
+function getPRNumberFromMessage(message, item) {
 	const match = message.match(commitRegex);
 	if (match == null) {
 		console.log(message, item);
@@ -182,7 +198,7 @@ async function getPullRequests(from, to) {
 			bar.tick(partItems.length);
 
 			const promises = partItems.map(item => {
-				return getPRInfo(getPRNumeberFromMessage(item.message, item), item);
+				return getPRInfo(getPRNumberFromMessage(item.message, item), item);
 			});
 
 			return Promise.all(promises).then(result => {
