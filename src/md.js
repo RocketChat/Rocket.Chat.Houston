@@ -123,6 +123,10 @@ function renderPRs(prs, historyDataReleasesOriginal, tag) {
 
 			const prInfo = pr.pr ? ` ([#${ pr.pr }](https://github.com/RocketChat/Rocket.Chat/pull/${ pr.pr })${ contributors })` : '';
 			data.push(`- ${ pr.title }${ prInfo }`);
+
+			if (pr.description) {
+				data.push(pr.description.replace(/(?=([*-]\s|\d+\.\s))/gm, '  ').replace(/^(?=[^\s])/gm, '  '));
+			}
 		});
 		if (group === 'NOGROUP') {
 			data.push('\n</details>');
