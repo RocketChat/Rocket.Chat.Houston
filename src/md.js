@@ -201,7 +201,6 @@ const getVersionObj = (release, tag, title, owner, repo, tagPrefix = '#') => {
 
 	if (noMainRelease) {
 		if (title) {
-			// result.push(`\n${ tagPrefix } ${ tagText } (Under Release Candidate Process)`);
 			version.title = `${ tagPrefix } ${ tagText } (Under Release Candidate Process)`;
 		}
 	} else {
