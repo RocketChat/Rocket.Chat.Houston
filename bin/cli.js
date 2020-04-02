@@ -1,33 +1,48 @@
 #! /usr/bin/env node
 
 const updateNotifier = require('update-notifier');
+const program = require('commander');
+const gitUrlParse = require('git-url-parse');
+const git = require('simple-git/promise')(process.cwd());
+
 const pkg = require('../package.json');
 updateNotifier({pkg}).notify();
 
-const program = require('commander');
 const logs = require('../src/logs');
 const md = require('../src/md');
+const setVersion = require('../src/set-version');
+
+const getRepoInfo = async() => {
+	const remote = await git.listRemote(['--get-url']);
+
+	const info = gitUrlParse(remote);
+
+	return {
+		owner: info.organization,
+		repo: info.name
+	};
+};
 
 program
 	.command('logs')
 	.description('Generate history.json')
 	.option('-h, --head_name <name>', 'Name of the new release. Will rename the current HEAD section')
-	.action(function({head_name}) {
-		logs({headName: head_name});
+	.action(async function({head_name}) {
+		logs({ ...await getRepoInfo(), headName: head_name });
 	});
 
 program
 	.command('md')
 	.description('Generate History.md from History.json')
-	.action(function() {
-		md();
+	.action(async function() {
+		md({ ...await getRepoInfo() });
 	});
 
 program
 	.command('release')
 	.description('Release a new version')
-	.action(function() {
-		require('../src/set-version');
+	.action(async function() {
+		setVersion(await getRepoInfo());
 	});
 
 program.parse(process.argv);

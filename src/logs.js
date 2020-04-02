@@ -6,6 +6,7 @@ const _ = require('underscore');
 const git = require('simple-git/promise')(process.cwd());
 const octokit = require('@octokit/rest')();
 
+// TODO what to do with this?
 const minTag = '0.55.0-rc.0';
 const commitRegexString = '(^Merge pull request #([0-9]+) from )|( \\(#([0-9]+)\\)$)';
 const commitRegex = new RegExp(commitRegexString);
@@ -54,8 +55,8 @@ octokit.authenticate({
 	type: 'token',
 	token: process.env.GITHUB_TOKEN
 });
-let owner = 'RocketChat';
-let repo = 'Rocket.Chat';
+let owner = '';
+let repo = '';
 
 function promiseRetryRateLimit(promiseFn, retryWait = 60000) {
 	return new Promise((resolve, reject) => {
@@ -262,7 +263,7 @@ async function getMissingTags() {
 	return _.pick(tags, missingTags);
 }
 
-module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:_repo = 'Rocket.Chat', getMetadata = () => Promise.resolve({}) }) {
+module.exports = function({headName = 'HEAD', owner:_owner = '', repo:_repo = '', getMetadata = () => Promise.resolve({}) }) {
 	owner = _owner;
 	repo = _repo;
 

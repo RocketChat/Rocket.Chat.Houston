@@ -463,8 +463,8 @@ class Houston {
 	}
 
 	async updateHistory() {
-		await logs({headName: this.version, getMetadata: this.getMetadata /*, owner: this.owner, repo: this.repo*/});
-		await md({ customMarkdown: this.customMarkdown });
+		await logs({headName: this.version, getMetadata: this.getMetadata, owner: this.owner, repo: this.repo });
+		await md({ customMarkdown: this.customMarkdown, owner: this.owner, repo: this.repo });
 		await this.shouldCommitFiles({amend: true});
 	}
 
@@ -613,5 +613,8 @@ class Houston {
 	}
 }
 
-const houston = new Houston();
-houston.init().catch(error => console.error(error));
+module.exports = function({ owner, repo }) {
+	const houston = new Houston({ owner, repo });
+	houston.init().catch(error => console.error(error));
+};
+

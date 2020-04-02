@@ -84,7 +84,7 @@ function getSummary(contributors, teamContributors, groupedPRs) {
 	return '';
 }
 
-function renderPRs(prs) {
+function renderPRs(prs, owner, repo) {
 
 	// remove duplicated PR entries
 	prs = prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
@@ -115,7 +115,7 @@ function renderPRs(prs) {
 				contributors = ` by ${ contributors }`;
 			}
 
-			const prInfo = pr.pr ? ` ([#${ pr.pr }](https://github.com/RocketChat/Rocket.Chat/pull/${ pr.pr })${ contributors })` : '';
+			const prInfo = pr.pr ? ` ([#${ pr.pr }](https://github.com/${ owner }/${ repo }/pull/${ pr.pr })${ contributors })` : '';
 			data.push(`\n- ${ pr.title }${ prInfo }`);
 
 			if (pr.description) {
@@ -184,12 +184,12 @@ const renderVersion = (releases) => {
 		`\n${ release.body }`);
 };
 
-const getVersionObj = (release, tag, title, tagPrefix = '#') => {
+const getVersionObj = (release, tag, title, owner, repo, tagPrefix = '#') => {
 	const { pull_requests, rcs, noMainRelease } = release;
 
 	const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
 
-	const { data, summary } = renderPRs(pull_requests, tag);
+	const { data, summary } = renderPRs(pull_requests, owner, repo);
 
 	const tagText = tag === 'HEAD' ? 'Next' : tag;
 
@@ -212,7 +212,7 @@ const getVersionObj = (release, tag, title, tagPrefix = '#') => {
 	}
 
 	if (rcs) {
-		version.body += rcs.reverse().map((rc) => renderVersion([getVersionObj(rc, rc.tag, title, '##')])).join('\n');
+		version.body += rcs.reverse().map((rc) => renderVersion([getVersionObj(rc, rc.tag, title, owner, repo, '##')])).join('\n');
 	}
 
 	return version;
@@ -235,9 +235,8 @@ const readManualFile = () => {
 	}
 };
 
-module.exports = async function({tag, write = true, title = true, customMarkdown = (md) => Promise.resolve(md)} = {}) {
-	// TODO: Get org from repo
-	const membersResult = await octokit.orgs.listMembers({org: 'RocketChat', per_page: 100});
+module.exports = async function({tag, write = true, title = true, customMarkdown = (md) => Promise.resolve(md), owner, repo} = {}) {
+	const membersResult = await octokit.orgs.listMembers({org: owner, per_page: 100});
 	nonContributors = membersResult.data.map(i => i.login);
 	if (nonContributors.length === 100) {
 		console.log('Need to implement pagination for members list');
@@ -301,7 +300,7 @@ module.exports = async function({tag, write = true, title = true, customMarkdown
 			const { pull_requests, rcs } = historyDataReleases[tag];
 			return pull_requests.length || rcs.length;
 		})
-		.map((tag) => customMarkdown(getVersionObj(historyDataReleases[tag], tag, title), historyDataReleases[tag])));
+		.map((tag) => customMarkdown(getVersionObj(historyDataReleases[tag], tag, title, owner, repo), historyDataReleases[tag])));
 
 	const file = renderVersion(releases);
 
