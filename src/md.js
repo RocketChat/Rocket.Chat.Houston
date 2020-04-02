@@ -84,16 +84,9 @@ function getSummary(contributors, teamContributors, groupedPRs) {
 	return '';
 }
 
-function renderPRs(prs, historyDataReleasesOriginal, tag) {
-	const otherTags = Object.keys(historyDataReleasesOriginal).filter(k => {
-		if (tag === 'HEAD') {
-			return true;
-		}
-		return k !== 'HEAD' && semver.lt(k, tag) && k.indexOf(tag) === -1;
-	});
-
-	const olderReleases = otherTags.map(t => historyDataReleasesOriginal[t]);
-	prs = prs.filter(p => p.manual || !olderReleases.some(r => r.pull_requests.some(p2 => p2.pr === p.pr)));
+function renderPRs(prs/*, historyDataReleasesOriginal, tag*/) {
+	// remove duplicated PR entries
+	prs = prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
 
 	const data = [];
 	const groupedPRs = groupPRs(prs);
