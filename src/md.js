@@ -84,7 +84,8 @@ function getSummary(contributors, teamContributors, groupedPRs) {
 	return '';
 }
 
-function renderPRs(prs/*, historyDataReleasesOriginal, tag*/) {
+function renderPRs(prs) {
+
 	// remove duplicated PR entries
 	prs = prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
 
@@ -173,7 +174,68 @@ function sort(a, b) {
 	return 0;
 }
 
-module.exports = async function({tag, write = true, title = true} = {}) {
+const renderVersion = (releases) => {
+	if (!releases) {
+		return '';
+	}
+	return releases.map((release) =>
+		`\n${ release.title }` +
+		`${ release.summary !== '' ? `\n${ release.summary }` : '' }` +
+		`\n${ release.body }`);
+};
+
+const getVersionObj = (release, tag, title, tagPrefix = '#') => {
+	const { pull_requests, rcs, noMainRelease } = release;
+
+	const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
+
+	const { data, summary } = renderPRs(pull_requests, tag);
+
+	const tagText = tag === 'HEAD' ? 'Next' : tag;
+
+	const version = {
+		title: '',
+		summary: '',
+		body: data.join('\n')
+	};
+
+	if (noMainRelease) {
+		if (title) {
+			// result.push(`\n${ tagPrefix } ${ tagText } (Under Release Candidate Process)`);
+			version.title = `${ tagPrefix } ${ tagText } (Under Release Candidate Process)`;
+		}
+	} else {
+		if (title) {
+			version.title = `${ tagPrefix } ${ tagText }`;
+		}
+		version.summary = `\`${ tagDate }${ summary }\``;
+	}
+
+	if (rcs) {
+		version.body += rcs.reverse().map((rc) => renderVersion([getVersionObj(rc, rc.tag, title, '##')])).join('\n');
+	}
+
+	return version;
+};
+
+const readHistoryFile = () => {
+	try {
+		return JSON.parse(fs.readFileSync(historyDataFile).toString()).releases;
+	} catch (error) {
+		throw new Error(`File ${ historyDataFile } not found`);
+	}
+};
+
+const readManualFile = () => {
+	try {
+		return JSON.parse(fs.readFileSync(historyManualDataFile).toString());
+	} catch (error) {
+		console.error(`File ${ historyManualDataFile } not found, ignoring manual entries`);
+		return {};
+	}
+};
+
+module.exports = async function({tag, write = true, title = true, customMarkdown = (md) => Promise.resolve(md)} = {}) {
 	// TODO: Get org from repo
 	const membersResult = await octokit.orgs.listMembers({org: 'RocketChat', per_page: 100});
 	nonContributors = membersResult.data.map(i => i.login);
@@ -181,24 +243,9 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 		console.log('Need to implement pagination for members list');
 	}
 
-	let historyDataReleases = (() => {
-		try {
-			return JSON.parse(fs.readFileSync(historyDataFile).toString()).releases;
-		} catch (error) {
-			throw new Error(`File ${ historyDataFile } not found`);
-		}
-	})();
+	let historyDataReleases = readHistoryFile();
 
-	const historyDataReleasesOriginal = historyDataReleases;
-
-	let historyManualData = (() => {
-		try {
-			return JSON.parse(fs.readFileSync(historyManualDataFile).toString());
-		} catch (error) {
-			console.error(`File ${ historyManualDataFile } not found, ignoring manual entries`);
-			return {};
-		}
-	})();
+	let historyManualData = readManualFile();
 
 	if (tag) {
 		historyDataReleases = Object.entries(historyDataReleases).filter(([key]) => key.indexOf(tag) === 0).reduce((v, [key, value]) => {
@@ -248,73 +295,15 @@ module.exports = async function({tag, write = true, title = true} = {}) {
 		}
 	});
 
-	const file = [];
+	const releases = await Promise.all(Object.keys(historyDataReleases)
+		.sort(sort)
+		.filter((tag) => {
+			const { pull_requests, rcs } = historyDataReleases[tag];
+			return pull_requests.length || rcs.length;
+		})
+		.map((tag) => customMarkdown(getVersionObj(historyDataReleases[tag], tag, title), historyDataReleases[tag])));
 
-	Object.keys(historyDataReleases).sort(sort).forEach(tag => {
-		const {pull_requests, rcs, node_version, npm_version, mongo_versions} = historyDataReleases[tag];
-
-		if (!pull_requests.length && !rcs.length) {
-			return;
-		}
-
-		const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
-
-		const {data, summary} = renderPRs(pull_requests, historyDataReleasesOriginal, tag);
-
-		const tagText = tag === 'HEAD' ? 'Next' : tag;
-
-		if (historyDataReleases[tag].noMainRelease) {
-			if (title) {
-				file.push(`\n# ${ tagText } (Under Release Candidate Process)`);
-			}
-		} else {
-			if (title) {
-				file.push(`\n# ${ tagText }`);
-			}
-			file.push(`\`${ tagDate }${ summary }\``);
-
-			if (node_version || npm_version || mongo_versions) {
-				file.push('\n### Engine versions');
-				if (node_version) {
-					file.push(`- Node: \`${ node_version }\``);
-				}
-				if (npm_version) {
-					file.push(`- NPM: \`${ npm_version }\``);
-				}
-				if (mongo_versions) {
-					file.push(`- MongoDB: \`${ mongo_versions.join(', ') }\``);
-				}
-			}
-		}
-
-		file.push(...data);
-
-		if (Array.isArray(rcs)) {
-			rcs.reverse().forEach(rc => {
-				const {data, summary} = renderPRs(rc.pull_requests, historyDataReleasesOriginal, rc.tag);
-
-				if (historyDataReleases[tag].noMainRelease) {
-					const tagDate = getTagDate(rc.tag) || getLatestCommitDate();
-					if (title) {
-						file.push(`\n## ${ rc.tag }`);
-					}
-					file.push(`\`${ tagDate }${ summary }\``);
-
-					if (node_version || npm_version) {
-						file.push('\n### Engine versions');
-						if (node_version) {
-							file.push(`- Node: \`${ node_version }\``);
-						}
-						if (npm_version) {
-							file.push(`- NPM: \`${ npm_version }\``);
-						}
-					}
-				}
-
-				file.push(...data);
-			});
-		}
-	});
+	const file = renderVersion(releases);
 
 	write && fs.writeFileSync(historyFile, file.join('\n'));
 

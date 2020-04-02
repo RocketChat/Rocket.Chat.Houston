@@ -34,6 +34,7 @@ class Houston {
 		this.version = version;
 
 		this.getMetadata = () => Promise.resolve({});
+		this.customMarkdown = (data) => Promise.resolve(data);
 
 		if (!this.version) {
 			this.readVersionFromPackageJson();
@@ -77,6 +78,10 @@ class Houston {
 
 		if (houston.metadata) {
 			this.getMetadata = require(path.resolve(process.cwd(), houston.metadata));
+		}
+
+		if (houston.markdown) {
+			this.customMarkdown = require(path.resolve(process.cwd(), houston.markdown));
 		}
 	}
 
@@ -459,7 +464,7 @@ class Houston {
 
 	async updateHistory() {
 		await logs({headName: this.version, getMetadata: this.getMetadata /*, owner: this.owner, repo: this.repo*/});
-		await md();
+		await md({ customMarkdown: this.customMarkdown });
 		await this.shouldCommitFiles({amend: true});
 	}
 
