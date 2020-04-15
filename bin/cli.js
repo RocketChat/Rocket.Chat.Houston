@@ -27,8 +27,9 @@ program
 	.command('logs')
 	.description('Generate history.json')
 	.option('-h, --head_name <name>', 'Name of the new release. Will rename the current HEAD section')
-	.action(async function({head_name}) {
-		logs({ ...await getRepoInfo(), headName: head_name });
+	.option('-t, --min_tag <tag>', 'Minimum tag to scrap the history')
+	.action(async function({head_name, min_tag}) {
+		logs({ ...await getRepoInfo(), headName: head_name, minTag: min_tag });
 	});
 
 program

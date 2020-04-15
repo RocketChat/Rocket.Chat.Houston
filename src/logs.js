@@ -6,8 +6,6 @@ const _ = require('underscore');
 const git = require('simple-git/promise')(process.cwd());
 const octokit = require('@octokit/rest')();
 
-// TODO what to do with this?
-const minTag = '0.55.0-rc.0';
 const commitRegexString = '(^Merge pull request #([0-9]+) from )|( \\(#([0-9]+)\\)$)';
 const commitRegex = new RegExp(commitRegexString);
 
@@ -220,7 +218,7 @@ async function getCurrentLatestTag() {
 	return (await git.raw(['describe', '--abbrev=0', '--tags'])).replace(/\n/, '');
 }
 
-async function getTags() {
+async function getTags({ minTag }) {
 	let tags = await git.tags();
 
 	tags = tags.all.filter(tag => /^\d+\.\d+\.\d+(-rc\.\d+)?$/.test(tag));
@@ -247,15 +245,15 @@ async function getTags() {
 				before: index ? tags[--index] : null
 			};
 		})
-		.filter(item => item.tag === 'HEAD' || semver.gte(item.tag, minTag))
+		.filter(item => item.tag === 'HEAD' || (minTag && semver.gte(item.tag, minTag)))
 		.reduce((value, item) => {
 			value[item.tag] = item;
 			return value;
 		}, {});
 }
 
-async function getMissingTags() {
-	const tags = await getTags();
+async function getMissingTags({ minTag }) {
+	const tags = await getTags({ minTag });
 	const missingTags = _.difference(Object.keys(tags), Object.keys(historyData.releases));
 
 	missingTags.push('HEAD');
@@ -263,12 +261,12 @@ async function getMissingTags() {
 	return _.pick(tags, missingTags);
 }
 
-module.exports = function({headName = 'HEAD', owner:_owner = '', repo:_repo = '', getMetadata = () => Promise.resolve({}) }) {
+module.exports = function({headName = 'HEAD', owner:_owner = '', repo:_repo = '', minTag = '', getMetadata = () => Promise.resolve({}) }) {
 	owner = _owner;
 	repo = _repo;
 
 	return new Promise((resolve) => {
-		getMissingTags().then(missingTags => {
+		getMissingTags({ minTag }).then(missingTags => {
 			console.log('Missing tags:');
 			console.log(JSON.stringify(Object.keys(missingTags), null, 2));
 			missingTags = Object.values(missingTags);

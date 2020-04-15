@@ -32,6 +32,7 @@ class Houston {
 		this.owner = owner;
 		this.repo = repo;
 		this.version = version;
+		this.minTag = '';
 
 		this.getMetadata = () => Promise.resolve({});
 		this.customMarkdown = (data) => Promise.resolve(data);
@@ -82,6 +83,10 @@ class Houston {
 
 		if (houston.markdown) {
 			this.customMarkdown = require(path.resolve(process.cwd(), houston.markdown));
+		}
+
+		if (houston.minTag) {
+			this.minTag = houston.minTag;
 		}
 	}
 
@@ -463,7 +468,7 @@ class Houston {
 	}
 
 	async updateHistory() {
-		await logs({headName: this.version, getMetadata: this.getMetadata, owner: this.owner, repo: this.repo });
+		await logs({headName: this.version, getMetadata: this.getMetadata, owner: this.owner, repo: this.repo, minTag: this.minTag });
 		await md({ customMarkdown: this.customMarkdown, owner: this.owner, repo: this.repo });
 		await this.shouldCommitFiles({amend: true});
 	}
