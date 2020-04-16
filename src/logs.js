@@ -159,8 +159,25 @@ function getPRNumberFromMessage(message, item) {
 	return number;
 }
 
+function getCommitRange(from, to) {
+	if (!from && !to) {
+		console.error('Invalid commits for range');
+		process.exit(1);
+	}
+
+	if (from && to) {
+		return `${ from }...${ to }`;
+	}
+
+	if (!from) {
+		return `${ to }^@`;
+	}
+
+	return `${ from }...HEAD`;
+}
+
 async function getPullRequests(from, to) {
-	const logParams = ['--no-decorate', '--graph', '-E', `--grep=${ commitRegexString }`, `${ from }...${ to }`];
+	const logParams = ['--no-decorate', '--graph', '-E', `--grep=${ commitRegexString }`, getCommitRange(from, to)];
 	logParams.format = {
 		hash: '%H',
 		date: '%ai',
@@ -245,7 +262,7 @@ async function getTags({ minTag }) {
 				before: index ? tags[--index] : null
 			};
 		})
-		.filter(item => item.tag === 'HEAD' || (minTag && semver.gte(item.tag, minTag)))
+		.filter(item => item.tag === 'HEAD' || !minTag || semver.gte(item.tag, minTag))
 		.reduce((value, item) => {
 			value[item.tag] = item;
 			return value;
