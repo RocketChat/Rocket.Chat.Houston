@@ -513,7 +513,7 @@ class Houston {
 			name: 'pushTag'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
+		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo, customMarkdown: this.customMarkdown});
 		if (answers.pushTag) {
 			try {
 				const release = await octokit.repos.getReleaseByTag({owner: this.owner, repo: this.repo, tag: this.version});
@@ -553,7 +553,7 @@ class Houston {
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
+		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo, customMarkdown: this.customMarkdown});
 		if (answers.create) {
 			console.log('Creating draft release');
 			await octokit.repos.createRelease({
@@ -576,7 +576,7 @@ class Houston {
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
+		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo, customMarkdown: this.customMarkdown});
 		if (answers.create) {
 			console.log('Creating pull request');
 			const pr = await octokit.pullRequests.create({
