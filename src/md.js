@@ -11,6 +11,17 @@ const H = require('just-handlebars-helpers');
 
 H.registerHelpers(Handlebars);
 
+const templateDir = `${ __dirname }/../templates`;
+fs.readdirSync(templateDir).forEach((file) => {
+	if (!file.endsWith('.hbs')) {
+		return;
+	}
+
+	Handlebars.registerPartial(file.replace('.hbs', ''), fs.readFileSync(path.join(templateDir, file)).toString());
+});
+
+const template = Handlebars.compile('{{> changelog}}');
+
 const historyDataFile = path.join(process.cwd(), '.github/history.json');
 const historyManualDataFile = path.join(process.cwd(), '.github/history-manual.json');
 const historyFile = path.join(process.cwd(), 'HISTORY.md');
@@ -91,7 +102,7 @@ function getSummary(contributors, teamContributors, groupedPRs) {
 	return '';
 }
 
-function renderPRs(prs, owner, repo) {
+function renderPRs(prs, owner, repo, release) {
 
 	// remove duplicated PR entries
 	prs = prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
@@ -158,9 +169,9 @@ function renderPRs(prs, owner, repo) {
 		});
 	}
 
-	const template = Handlebars.compile(fs.readFileSync(`${ __dirname }/../templates/changelog.hbs`).toString());
 	return {
-		data: template({ groupedPRs: Object.entries(groupedPRs).map(([key, values]) => ({title: GroupNames[key], key, values})), contributors, teamContributors, owner, repo }),
+		// data: data.join('\n'),
+		data: template({ release, groupedPRs: Object.entries(groupedPRs).map(([key, values]) => ({title: GroupNames[key], key, values})), contributors, teamContributors, owner, repo }),
 		summary: getSummary(contributors, teamContributors, groupedPRs)
 	};
 }
@@ -197,7 +208,7 @@ const getVersionObj = (release, tag, title, owner, repo, tagPrefix = '#') => {
 
 	const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
 
-	const { data, summary } = renderPRs(pull_requests, owner, repo);
+	const { data, summary } = renderPRs(pull_requests, owner, repo, release);
 
 	const tagText = tag === 'HEAD' ? 'Next' : tag;
 

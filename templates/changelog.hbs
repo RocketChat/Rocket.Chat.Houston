@@ -1,22 +1,18 @@
+
+{{> versions}}
+
 {{#each groupedPRs}}
-  {{~log title~}}
   {{#if values}}
     {{#if (neq key 'NOGROUP')}}
-      {{~ title }}
+{{ title }}
 
-      {{#each values}}
-        {{~ 1}}- {{ title }} ([#{{ pr }}](https://github.com/{{ owner }}/{{ repo }}/pull/{{ pr }}) {{ contributors }}
-
-      {{/each}}
+{{> pull_requests}}
     {{/if}}
     {{#if (eq key 'NOGROUP')}}
-      {{~ 1}}<details><summary>{{ title }}</summary>
+<details><summary>{{ title }}</summary>
 
-        {{#each values}}
-          {{~ 1}}- {{ title }} ([#{{ pr }}](https://github.com/{{ owner }}/{{ repo }}/pull/{{ pr }}) {{ contributors }}
-
-        {{/each}}
-      {{~ 1}}</details>
+{{> pull_requests}}
+</details>
     {{/if}}
   {{/if}}
 {{/each}}
