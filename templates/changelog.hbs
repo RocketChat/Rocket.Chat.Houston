@@ -1,0 +1,22 @@
+{{#each groupedPRs}}
+  {{~log title~}}
+  {{#if values}}
+    {{#if (neq key 'NOGROUP')}}
+      {{~ title }}
+
+      {{#each values}}
+        {{~ 1}}- {{ title }} ([#{{ pr }}](https://github.com/{{ owner }}/{{ repo }}/pull/{{ pr }}) {{ contributors }}
+
+      {{/each}}
+    {{/if}}
+    {{#if (eq key 'NOGROUP')}}
+      {{~ 1}}<details><summary>{{ title }}</summary>
+
+        {{#each values}}
+          {{~ 1}}- {{ title }} ([#{{ pr }}](https://github.com/{{ owner }}/{{ repo }}/pull/{{ pr }}) {{ contributors }}
+
+        {{/each}}
+      {{~ 1}}</details>
+    {{/if}}
+  {{/if}}
+{{/each}}

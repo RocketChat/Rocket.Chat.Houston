@@ -5,6 +5,12 @@ const _ = require('underscore');
 const execSync = require('child_process').execSync;
 const octokit = require('@octokit/rest')();
 
+const Handlebars = require('handlebars');
+
+const H = require('just-handlebars-helpers');
+
+H.registerHelpers(Handlebars);
+
 const historyDataFile = path.join(process.cwd(), '.github/history.json');
 const historyManualDataFile = path.join(process.cwd(), '.github/history-manual.json');
 const historyFile = path.join(process.cwd(), 'HISTORY.md');
@@ -22,7 +28,8 @@ const GroupNames = {
 	FIX: '### 🐛 Bug fixes',
 	NEW: '### 🎉 New features',
 	BREAK: '### ⚠️ BREAKING CHANGES',
-	MINOR: '🔍 Minor changes'
+	MINOR: '🔍 Minor changes',
+	NOGROUP: '🔍 Minor changes'
 };
 
 const SummaryNameEmoticons = {
@@ -151,8 +158,9 @@ function renderPRs(prs, owner, repo) {
 		});
 	}
 
+	const template = Handlebars.compile(fs.readFileSync(`${ __dirname }/../templates/changelog.hbs`).toString());
 	return {
-		data,
+		data: template({ groupedPRs: Object.entries(groupedPRs).map(([key, values]) => ({title: GroupNames[key], key, values})), contributors, teamContributors, owner, repo }),
 		summary: getSummary(contributors, teamContributors, groupedPRs)
 	};
 }
@@ -196,7 +204,7 @@ const getVersionObj = (release, tag, title, owner, repo, tagPrefix = '#') => {
 	const version = {
 		title: '',
 		summary: '',
-		body: data.join('\n')
+		body: data
 	};
 
 	if (noMainRelease) {
