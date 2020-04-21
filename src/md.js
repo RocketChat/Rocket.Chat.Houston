@@ -41,24 +41,6 @@ octokit.authenticate({
 const systemUsers = ['web-flow'];
 let nonContributors = [];
 
-const GroupNames = {
-	IMPROVE: '### 🚀 Improvements',
-	FIX: '### 🐛 Bug fixes',
-	NEW: '### 🎉 New features',
-	BREAK: '### ⚠️ BREAKING CHANGES',
-	MINOR: '🔍 Minor changes',
-	NOGROUP: '🔍 Minor changes'
-};
-
-const SummaryNameEmoticons = {
-	IMPROVE: '🚀',
-	FIX: '🐛',
-	NEW: '🎉',
-	BREAK: '️️️⚠️',
-	NOGROUP: '🔍',
-	contributor: '👩‍💻👨‍💻'
-};
-
 function groupPRs(prs) {
 	const groups = {
 		BREAK: [],
@@ -78,7 +60,7 @@ function groupPRs(prs) {
 		}
 	});
 
-	return groups;
+	return Object.entries(groups).map(([key, values]) => ({key, values}));
 }
 
 function getTagDate(tag) {
@@ -89,27 +71,7 @@ function getLatestCommitDate() {
 	return execSync('git log --date=short --format=\'%ad\' -1').toString().replace(/\n/, '');
 }
 
-function getSummary(contributors, teamContributors, groupedPRs) {
-	const summary = [];
-
-	Object.keys(groupedPRs).forEach(group => {
-		if (groupedPRs[group].length) {
-			summary.push(`${ groupedPRs[group].length } ${ SummaryNameEmoticons[group] }`);
-		}
-	});
-
-	if (contributors.length + teamContributors.length) {
-		summary.push(`${ contributors.length + teamContributors.length } ${ SummaryNameEmoticons.contributor }`);
-	}
-
-	if (summary.length) {
-		return `  ·  ${ summary.join('  ·  ') }`;
-	}
-
-	return '';
-}
-
-function renderPRs(prs, owner, repo, release) {
+function renderPRs(prs, owner, repo, release, tag, tagDate, releaseCandidate) {
 	// remove duplicated PR entries
 	prs = prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
 
@@ -124,8 +86,18 @@ function renderPRs(prs, owner, repo, release) {
 	}, []), nonContributors)).sort();
 
 	return {
-		data: template({ nonContributors, release, groupedPRs: Object.entries(groupedPRs).map(([key, values]) => ({title: GroupNames[key], key, values})), contributors, teamContributors, owner, repo }).replace(/\n$/, ''),
-		summary: getSummary(contributors, teamContributors, groupedPRs)
+		data: template({
+			nonContributors,
+			release,
+			groupedPRs,
+			contributors,
+			teamContributors,
+			owner,
+			repo,
+			tag,
+			tagDate,
+			releaseCandidate
+		}).replace(/\n$/, '')
 	};
 }
 
@@ -150,40 +122,22 @@ const renderVersion = (releases) => {
 	if (!releases) {
 		return '';
 	}
-	return releases.map((release) =>
-		`\n${ release.title }` +
-		`${ release.summary !== '' ? `\n${ release.summary }` : '' }` +
-		`\n${ release.body }`);
+	return releases.map((release) => release.body);
 };
 
-const getVersionObj = (release, tag, title, owner, repo, tagPrefix = '#') => {
-	const { pull_requests, rcs, noMainRelease } = release;
+const getVersionObj = (release, tag, title, owner, repo, releaseCandidate = false) => {
+	const { pull_requests, rcs } = release;
 
 	const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
 
-	const { data, summary } = renderPRs(pull_requests, owner, repo, release);
-
-	const tagText = tag === 'HEAD' ? 'Next' : tag;
+	const { data } = renderPRs(pull_requests, owner, repo, release, tag, tagDate, releaseCandidate);
 
 	const version = {
-		title: '',
-		summary: '',
 		body: data
 	};
 
-	if (noMainRelease) {
-		if (title) {
-			version.title = `${ tagPrefix } ${ tagText } (Under Release Candidate Process)`;
-		}
-	} else {
-		if (title) {
-			version.title = `${ tagPrefix } ${ tagText }`;
-		}
-		version.summary = `\`${ tagDate }${ summary }\``;
-	}
-
 	if (rcs) {
-		version.body += rcs.reverse().map((rc) => renderVersion([getVersionObj(rc, rc.tag, title, owner, repo, '##')])).join('\n');
+		version.body += rcs.reverse().map((rc) => renderVersion([getVersionObj(rc, rc.tag, title, owner, repo, true)])).join('\n');
 	}
 
 	return version;

@@ -1,15 +1,18 @@
+
+{{#if releaseCandidate}}#{{/if}}# {{#if (eq tag 'HEAD')}}Next{{else}}{{ tag }}{{/if}}{{#if release.noMainRelease}} (Under Release Candidate Process){{/if}}
+{{#unless release.noMainRelease}}`{{ tagDate }}  ·  {{ summary .}}`{{/unless}}
 {{> versions}}
 {{#each groupedPRs}}
 {{#if values}}
 
 {{#if (neq key 'NOGROUP')}}
-{{ title }}
+{{ groupTitle key }}
 
 {{> pull_requests}}
 {{/if}}
 {{#if (eq key 'NOGROUP')}}
 <details>
-<summary>{{ title }}</summary>
+<summary>{{ groupTitle key }}</summary>
 
 {{> pull_requests}}
 
