@@ -110,74 +110,20 @@ function getSummary(contributors, teamContributors, groupedPRs) {
 }
 
 function renderPRs(prs, owner, repo, release) {
-
 	// remove duplicated PR entries
 	prs = prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
 
-	const data = [];
 	const groupedPRs = groupPRs(prs);
 
-	Object.keys(groupedPRs).forEach(group => {
-		const prs = groupedPRs[group];
-		if (!prs.length) {
-			return;
-		}
-
-		const groupName = GroupNames[group];
-
-		if (group === 'NOGROUP') {
-			data.push(`\n<details>\n<summary>${ GroupNames.MINOR }</summary>\n`);
-		} else {
-			data.push(`\n${ groupName }\n`);
-		}
-		prs.forEach(pr => {
-			let contributors = _.compact(_.difference(pr.contributors, nonContributors, systemUsers))
-				.sort()
-				.map(contributor => `[@${ contributor }](https://github.com/${ contributor })`)
-				.join(' & ');
-
-			if (contributors) {
-				contributors = ` by ${ contributors }`;
-			}
-
-			const prInfo = pr.pr ? ` ([#${ pr.pr }](https://github.com/${ owner }/${ repo }/pull/${ pr.pr })${ contributors })` : '';
-			data.push(`\n- ${ pr.title }${ prInfo }`);
-
-			if (pr.description) {
-				data.push(pr.description.replace(/(?=([*-]\s|\d+\.\s))/gm, '  ').replace(/^(?=[^\s])/gm, '  '));
-			}
-		});
-		if (group === 'NOGROUP') {
-			data.push('\n</details>');
-		}
-	});
-
 	const contributors = _.compact(_.difference(prs.reduce((value, pr) => {
-		return _._.unique(value.concat(pr.contributors));
-	}, []), nonContributors, systemUsers));
+		return _.unique(value.concat(pr.contributors));
+	}, []), nonContributors, systemUsers)).sort();
 
 	const teamContributors = _.compact(_.intersection(prs.reduce((value, pr) => {
 		return _.unique(value.concat(pr.contributors));
-	}, []), nonContributors));
-
-	if (contributors.length) {
-		// TODO: Improve list like https://gist.github.com/paulmillr/2657075/
-		data.push('\n### 👩‍💻👨‍💻 Contributors 😍\n');
-		contributors.sort().forEach(contributor => {
-			data.push(`- [@${ contributor }](https://github.com/${ contributor })`);
-		});
-	}
-
-	if (teamContributors.length) {
-		// TODO: Improve list like https://gist.github.com/paulmillr/2657075/
-		data.push('\n### 👩‍💻👨‍💻 Core Team 🤓\n');
-		teamContributors.sort().forEach(contributor => {
-			data.push(`- [@${ contributor }](https://github.com/${ contributor })`);
-		});
-	}
+	}, []), nonContributors)).sort();
 
 	return {
-		// data: data.join('\n'),
 		data: template({ nonContributors, release, groupedPRs: Object.entries(groupedPRs).map(([key, values]) => ({title: GroupNames[key], key, values})), contributors, teamContributors, owner, repo }).replace(/\n$/, ''),
 		summary: getSummary(contributors, teamContributors, groupedPRs)
 	};
