@@ -13,11 +13,18 @@ H.registerHelpers(Handlebars);
 
 const templateDir = `${ __dirname }/../templates`;
 fs.readdirSync(templateDir).forEach((file) => {
-	if (!file.endsWith('.hbs')) {
-		return;
+	if (file.endsWith('.hbs')) {
+		Handlebars.registerPartial(file.replace('.hbs', ''), fs.readFileSync(path.join(templateDir, file)).toString());
 	}
 
-	Handlebars.registerPartial(file.replace('.hbs', ''), fs.readFileSync(path.join(templateDir, file)).toString());
+	if (file.endsWith('.js')) {
+		const helper = require(path.join(templateDir, file));
+		if (typeof helper === 'function') {
+			Handlebars.registerHelper(file.replace('.js', ''), helper);
+		} else {
+			Handlebars.registerHelper(helper);
+		}
+	}
 });
 
 const template = Handlebars.compile('{{> changelog}}');
@@ -171,7 +178,7 @@ function renderPRs(prs, owner, repo, release) {
 
 	return {
 		// data: data.join('\n'),
-		data: template({ release, groupedPRs: Object.entries(groupedPRs).map(([key, values]) => ({title: GroupNames[key], key, values})), contributors, teamContributors, owner, repo }),
+		data: template({ nonContributors, release, groupedPRs: Object.entries(groupedPRs).map(([key, values]) => ({title: GroupNames[key], key, values})), contributors, teamContributors, owner, repo }).replace(/\n$/, ''),
 		summary: getSummary(contributors, teamContributors, groupedPRs)
 	};
 }

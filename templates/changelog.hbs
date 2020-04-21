@@ -1,18 +1,20 @@
 
-{{> versions}}
-
-{{#each groupedPRs}}
-  {{#if values}}
-    {{#if (neq key 'NOGROUP')}}
+{{~> versions~}}
+{{~#each groupedPRs}}{{~#if values}}
+{{#if (neq key 'NOGROUP')}}
 {{ title }}
 
 {{> pull_requests}}
-    {{/if}}
-    {{#if (eq key 'NOGROUP')}}
-<details><summary>{{ title }}</summary>
+{{/if}}
+{{#if (eq key 'NOGROUP')}}
+<details>
+<summary>{{ title }}</summary>
 
 {{> pull_requests}}
+
 </details>
-    {{/if}}
-  {{/if}}
-{{/each}}
+{{/if}}
+{{~/if}}
+{{~/each~}}
+{{> contributors contributors=contributors title='### 👩‍💻👨‍💻 Contributors 😍'}}
+{{> contributors contributors=teamContributors title='### 👩‍💻👨‍💻 Core Team 🤓'}}
