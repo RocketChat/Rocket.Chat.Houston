@@ -11,21 +11,30 @@ const H = require('just-handlebars-helpers');
 
 H.registerHelpers(Handlebars);
 
-const templateDir = `${ __dirname }/../templates`;
-fs.readdirSync(templateDir).forEach((file) => {
-	if (file.endsWith('.hbs')) {
-		Handlebars.registerPartial(file.replace('.hbs', ''), fs.readFileSync(path.join(templateDir, file)).toString());
-	}
-
-	if (file.endsWith('.js')) {
-		const helper = require(path.join(templateDir, file));
-		if (typeof helper === 'function') {
-			Handlebars.registerHelper(file.replace('.js', ''), helper);
-		} else {
-			Handlebars.registerHelper(helper);
+function loadTemplatesFromDir(dir) {
+	fs.readdirSync(dir).forEach((file) => {
+		if (file.endsWith('.hbs')) {
+			Handlebars.registerPartial(file.replace('.hbs', ''), fs.readFileSync(path.join(dir, file)).toString());
 		}
-	}
-});
+
+		if (file.endsWith('.js')) {
+			const helper = require(path.join(dir, file));
+			if (typeof helper === 'function') {
+				Handlebars.registerHelper(file.replace('.js', ''), helper);
+			} else {
+				Handlebars.registerHelper(helper);
+			}
+		}
+	});
+}
+
+loadTemplatesFromDir(path.resolve(__dirname, '../templates'));
+try {
+	loadTemplatesFromDir(path.resolve(process.cwd(), '.houston'));
+} catch (e) {
+	//
+}
+
 
 const template = Handlebars.compile('{{> changelog}}');
 
