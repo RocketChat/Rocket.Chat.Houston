@@ -1,6 +1,7 @@
+{{> versions}}
+{{#each groupedPRs}}
+{{#if values}}
 
-{{~> versions~}}
-{{~#each groupedPRs}}{{~#if values}}
 {{#if (neq key 'NOGROUP')}}
 {{ title }}
 
@@ -14,7 +15,7 @@
 
 </details>
 {{/if}}
-{{~/if}}
-{{~/each~}}
+{{/if}}
+{{/each}}
 {{> contributors contributors=contributors title='### 👩‍💻👨‍💻 Contributors 😍'}}
 {{> contributors contributors=teamContributors title='### 👩‍💻👨‍💻 Core Team 🤓'}}
