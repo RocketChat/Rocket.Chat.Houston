@@ -1,4 +1,6 @@
-
+{{~let 'groupedPRs' (groupedPRs prs)}}
+{{~let 'externalContributors' (getExternalContributors prs)}}
+{{~let 'teamContributors' (getTeamContributors prs)}}
 {{#if releaseCandidate}}#{{/if}}# {{#if (eq tag 'HEAD')}}Next{{else}}{{ tag }}{{/if}}{{#if release.noMainRelease}} (Under Release Candidate Process){{/if}}
 {{#unless release.noMainRelease}}`{{ tagDate }}  ·  {{ summary .}}`{{/unless}}
 {{> metadata}}
@@ -20,5 +22,5 @@
 {{/if}}
 {{/if}}
 {{/each}}
-{{> contributors contributors=contributors title='### 👩‍💻👨‍💻 Contributors 😍'}}
+{{> contributors contributors=externalContributors title='### 👩‍💻👨‍💻 Contributors 😍'}}
 {{> contributors contributors=teamContributors title='### 👩‍💻👨‍💻 Core Team 🤓'}}

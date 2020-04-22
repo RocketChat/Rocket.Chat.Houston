@@ -3,8 +3,6 @@
 const updateNotifier = require('update-notifier');
 const program = require('commander');
 const gitUrlParse = require('git-url-parse');
-const path = require('path');
-const fs = require('fs');
 const git = require('simple-git/promise')(process.cwd());
 
 const pkg = require('../package.json');
@@ -25,19 +23,6 @@ const getRepoInfo = async() => {
 	};
 };
 
-let customMarkdown = (data) => Promise.resolve(data);
-
-const filePath = path.resolve(process.cwd(), './package.json');
-const file = JSON.parse(fs.readFileSync(filePath));
-if (!file.houston) {
-	return;
-}
-const { houston } = file;
-
-if (houston.markdown) {
-	customMarkdown = require(path.resolve(process.cwd(), houston.markdown));
-}
-
 program
 	.command('logs')
 	.description('Generate history.json')
@@ -51,7 +36,7 @@ program
 	.command('md')
 	.description('Generate History.md from History.json')
 	.action(async function() {
-		md({ ...await getRepoInfo(), customMarkdown });
+		md({ ...await getRepoInfo() });
 	});
 
 program

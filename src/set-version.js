@@ -35,7 +35,6 @@ class Houston {
 		this.minTag = '';
 
 		this.getMetadata = () => Promise.resolve({});
-		this.customMarkdown = (data) => Promise.resolve(data);
 
 		if (!this.version) {
 			this.readVersionFromPackageJson();
@@ -79,10 +78,6 @@ class Houston {
 
 		if (houston.metadata) {
 			this.getMetadata = require(path.resolve(process.cwd(), houston.metadata));
-		}
-
-		if (houston.markdown) {
-			this.customMarkdown = require(path.resolve(process.cwd(), houston.markdown));
 		}
 
 		if (houston.minTag) {
@@ -469,7 +464,7 @@ class Houston {
 
 	async updateHistory() {
 		await logs({headName: this.version, getMetadata: this.getMetadata, owner: this.owner, repo: this.repo, minTag: this.minTag });
-		await md({ customMarkdown: this.customMarkdown, owner: this.owner, repo: this.repo });
+		await md({ owner: this.owner, repo: this.repo });
 		await this.shouldCommitFiles({amend: true});
 	}
 
@@ -513,7 +508,7 @@ class Houston {
 			name: 'pushTag'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo, customMarkdown: this.customMarkdown});
+		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 		if (answers.pushTag) {
 			try {
 				const release = await octokit.repos.getReleaseByTag({owner: this.owner, repo: this.repo, tag: this.version});
@@ -553,7 +548,7 @@ class Houston {
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo, customMarkdown: this.customMarkdown});
+		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 		if (answers.create) {
 			console.log('Creating draft release');
 			await octokit.repos.createRelease({
@@ -576,7 +571,7 @@ class Houston {
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo, customMarkdown: this.customMarkdown});
+		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 		if (answers.create) {
 			console.log('Creating pull request');
 			const pr = await octokit.pullRequests.create({
