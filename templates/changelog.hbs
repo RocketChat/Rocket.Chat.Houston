@@ -1,10 +1,3 @@
-{{~let . 'groupedPRs' (groupedPRs release.pull_requests)}}
-{{~let . 'externalContributors' (getExternalContributors release.pull_requests)}}
-{{~let . 'teamContributors' (getTeamContributors release.pull_requests)}}
-{{> header}}
-{{> summary}}
-{{> metadata}}
-{{> prs}}
-{{> contributors contributors=externalContributors title='### 👩‍💻👨‍💻 Contributors 😍'}}
-{{> contributors contributors=teamContributors title='### 👩‍💻👨‍💻 Core Team 🤓'}}
-{{> rcs}}
+{{#each releases}}
+{{> release .. release=release tag=tag}}
+{{/each}}

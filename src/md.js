@@ -175,17 +175,19 @@ module.exports = async function({tag, write = true, title = true, owner, repo} =
 			const { pull_requests, rcs } = historyDataReleases[tag];
 			return pull_requests.length || rcs.length;
 		})
-		.map((tag) => template({
-			teamMembers,
+		.map((tag) => ({
 			release: historyDataReleases[tag],
-			owner,
-			repo,
-			tag,
-			showTitle: title,
-			lastCommitDate
-		}).replace(/\n$/, '')));
+			tag
+		})));
 
-	const file = releases.join('\n');
+	const file = template({
+		teamMembers,
+		releases,
+		owner,
+		repo,
+		showTitle: title,
+		lastCommitDate
+	}).replace(/\n$/, '');
 
 	write && fs.writeFileSync(historyFile, file);
 
