@@ -2,6 +2,7 @@
 
 const updateNotifier = require('update-notifier');
 const program = require('commander');
+const path = require('path');
 const gitUrlParse = require('git-url-parse');
 const git = require('simple-git/promise')(process.cwd());
 
@@ -23,13 +24,21 @@ const getRepoInfo = async() => {
 	};
 };
 
+let getMetadata = () => Promise.resolve({});
+
+try {
+	getMetadata = require(path.resolve(process.cwd(), '.houston/metadata.js'));
+} catch (e) {
+	//
+}
+
 program
 	.command('logs')
 	.description('Generate history.json')
 	.option('-h, --head_name <name>', 'Name of the new release. Will rename the current HEAD section')
 	.option('-t, --min_tag <tag>', 'Minimum tag to scrap the history')
 	.action(async function({head_name, min_tag}) {
-		logs({ ...await getRepoInfo(), headName: head_name, minTag: min_tag });
+		logs({ ...await getRepoInfo(), headName: head_name, minTag: min_tag, getMetadata });
 	});
 
 program
@@ -43,7 +52,7 @@ program
 	.command('release')
 	.description('Release a new version')
 	.action(async function() {
-		setVersion(await getRepoInfo());
+		setVersion(await getRepoInfo(), getMetadata);
 	});
 
 program.parse(process.argv);

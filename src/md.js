@@ -43,7 +43,7 @@ function loadTemplatesFromDir(dir) {
 }
 
 try {
-	loadTemplatesFromDir(path.resolve(process.cwd(), '.houston'));
+	loadTemplatesFromDir(path.resolve(process.cwd(), '.houston/templates'));
 } catch (e) {
 	//
 }
@@ -60,8 +60,6 @@ octokit.authenticate({
 	type: 'token',
 	token: process.env.GITHUB_TOKEN
 });
-
-let teamMembers = [];
 
 function getTagDate(tag) {
 	return execSync(`git tag -l --format="%(creatordate:short)" ${ tag }`).toString().replace(/\n/, '');
@@ -107,7 +105,7 @@ const readManualFile = () => {
 
 module.exports = async function({tag, write = true, title = true, owner, repo} = {}) {
 	const membersResult = await octokit.orgs.listMembers({org: owner, per_page: 100});
-	teamMembers = membersResult.data.map(i => i.login);
+	const teamMembers = membersResult.data.map(i => i.login);
 	if (teamMembers.length === 100) {
 		console.log('Need to implement pagination for members list');
 	}

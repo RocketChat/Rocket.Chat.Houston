@@ -27,14 +27,14 @@ class Houston {
 	constructor({
 		owner,
 		repo,
-		version
+		version,
+		getMetadata
 	} = {}) {
 		this.owner = owner;
 		this.repo = repo;
 		this.version = version;
 		this.minTag = '';
-
-		this.getMetadata = () => Promise.resolve({});
+		this.getMetadata = getMetadata;
 
 		if (!this.version) {
 			this.readVersionFromPackageJson();
@@ -74,10 +74,6 @@ class Houston {
 			houston.updateFiles.forEach((file) => {
 				files.push(file);
 			});
-		}
-
-		if (houston.metadata) {
-			this.getMetadata = require(path.resolve(process.cwd(), houston.metadata));
 		}
 
 		if (houston.minTag) {
@@ -613,8 +609,8 @@ class Houston {
 	}
 }
 
-module.exports = function({ owner, repo }) {
-	const houston = new Houston({ owner, repo });
+module.exports = function({ owner, repo }, getMetadata) {
+	const houston = new Houston({ owner, repo, getMetadata });
 	houston.init().catch(error => console.error(error));
 };
 
