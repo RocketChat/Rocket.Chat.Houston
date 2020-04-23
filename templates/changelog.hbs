@@ -1,26 +1,10 @@
-{{~let 'groupedPRs' (groupedPRs prs)}}
-{{~let 'externalContributors' (getExternalContributors prs)}}
-{{~let 'teamContributors' (getTeamContributors prs)}}
-{{#if releaseCandidate}}#{{/if}}# {{#if (eq tag 'HEAD')}}Next{{else}}{{ tag }}{{/if}}{{#if release.noMainRelease}} (Under Release Candidate Process){{/if}}
-{{#unless release.noMainRelease}}`{{ tagDate }}  ·  {{ summary .}}`{{/unless}}
+{{~let . 'groupedPRs' (groupedPRs release.pull_requests)}}
+{{~let . 'externalContributors' (getExternalContributors release.pull_requests)}}
+{{~let . 'teamContributors' (getTeamContributors release.pull_requests)}}
+{{> header}}
+{{> summary}}
 {{> metadata}}
-{{#each groupedPRs}}
-{{#if values}}
-
-{{#if (neq key 'NOGROUP')}}
-{{ groupTitle key }}
-
-{{> pull_requests}}
-{{/if}}
-{{#if (eq key 'NOGROUP')}}
-<details>
-<summary>{{ groupTitle key }}</summary>
-
-{{> pull_requests}}
-
-</details>
-{{/if}}
-{{/if}}
-{{/each}}
+{{> prs}}
 {{> contributors contributors=externalContributors title='### 👩‍💻👨‍💻 Contributors 😍'}}
 {{> contributors contributors=teamContributors title='### 👩‍💻👨‍💻 Core Team 🤓'}}
+{{> rcs}}

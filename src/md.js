@@ -88,29 +88,6 @@ function sort(a, b) {
 	return 0;
 }
 
-const renderRelease = (release, tag, title, owner, repo, releaseCandidate = false) => {
-	const { pull_requests: prs, rcs } = release;
-
-	const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
-
-	let body = template({
-		teamMembers,
-		release,
-		prs,
-		owner,
-		repo,
-		tag,
-		tagDate,
-		releaseCandidate
-	}).replace(/\n$/, '');
-
-	if (rcs) {
-		body += rcs.reverse().map((rc) => renderRelease(rc, rc.tag, title, owner, repo, true)).join('\n');
-	}
-
-	return body;
-};
-
 const readHistoryFile = () => {
 	try {
 		return JSON.parse(fs.readFileSync(historyDataFile).toString()).releases;
@@ -161,8 +138,9 @@ module.exports = async function({tag, write = true, title = true, owner, repo} =
 		historyDataReleases[tag].pull_requests.unshift(...historyManualData[tag].map((pr) => ({ manual: true, ...pr })));
 	});
 
-	Object.values(historyDataReleases).forEach(value => {
+	Object.entries(historyDataReleases).forEach(([tag, value]) => {
 		value.rcs = [];
+		value.tagDate = value.tagDate || getTagDate(tag);
 	});
 
 	Object.keys(historyDataReleases).forEach(tag => {
@@ -170,6 +148,7 @@ module.exports = async function({tag, write = true, title = true, owner, repo} =
 			const mainTag = tag.replace(/-rc.*/, '');
 			historyDataReleases[mainTag] = historyDataReleases[mainTag] || {
 				noMainRelease: true,
+				tagDate: getTagDate(mainTag),
 				pull_requests: [],
 				rcs: []
 			};
@@ -177,6 +156,7 @@ module.exports = async function({tag, write = true, title = true, owner, repo} =
 			if (historyDataReleases[mainTag].noMainRelease) {
 				historyDataReleases[mainTag].rcs.push({
 					tag,
+					tagDate: getTagDate(tag),
 					pull_requests: historyDataReleases[tag].pull_requests
 				});
 			} else {
@@ -187,13 +167,23 @@ module.exports = async function({tag, write = true, title = true, owner, repo} =
 		}
 	});
 
+	const lastCommitDate = getLatestCommitDate();
+
 	const releases = await Promise.all(Object.keys(historyDataReleases)
 		.sort(sort)
 		.filter((tag) => {
 			const { pull_requests, rcs } = historyDataReleases[tag];
 			return pull_requests.length || rcs.length;
 		})
-		.map((tag) => renderRelease(historyDataReleases[tag], tag, title, owner, repo), historyDataReleases[tag]));
+		.map((tag) => template({
+			teamMembers,
+			release: historyDataReleases[tag],
+			owner,
+			repo,
+			tag,
+			showTitle: title,
+			lastCommitDate
+		}).replace(/\n$/, '')));
 
 	const file = releases.join('\n');
 

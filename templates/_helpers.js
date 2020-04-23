@@ -25,8 +25,8 @@ function removeDuplicates(prs) {
 }
 
 module.exports = {
-	let(name, value, {data}) {
-		data.root[name] = value;
+	let(data, name, value) {
+		data[name] = value;
 	},
 
 	groupedPRs(prs) {
@@ -76,7 +76,7 @@ module.exports = {
 		return pr.description.replace(/(?=([*-]\s|\d+\.\s))/gm, '  ').replace(/^(?=[^\s])/gm, '  ');
 	},
 
-	summary({groupedPRs, externalContributors, teamContributors}) {
+	getSummary({groupedPRs, externalContributors, teamContributors}) {
 		const summary = [];
 
 		groupedPRs.forEach(({key, values}) => {
@@ -108,5 +108,16 @@ module.exports = {
 		return _.compact(_.intersection(prs.reduce((value, pr) => {
 			return _.unique(value.concat(pr.contributors));
 		}, []), data.root.teamMembers)).sort();
+	},
+
+	getTagDate({tag, lastCommitDate, release}) {
+		return tag === 'HEAD' ? lastCommitDate : (release.tagDate || lastCommitDate);
+	},
+
+	reverse(arr) {
+		if (!Array.isArray(arr)) {
+			return arr;
+		}
+		return arr.reverse();
 	}
 };
