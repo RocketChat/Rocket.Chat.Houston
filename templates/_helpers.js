@@ -20,6 +20,10 @@ const GroupNames = {
 	NOGROUP: '🔍 Minor changes'
 };
 
+function removeDuplicates(prs) {
+	return prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
+}
+
 module.exports = {
 	let(name, value, {data}) {
 		data.root[name] = value;
@@ -33,6 +37,8 @@ module.exports = {
 			FIX: [],
 			NOGROUP: []
 		};
+
+		prs = removeDuplicates(prs);
 
 		prs.forEach(pr => {
 			const match = pr.title.match(/\[(FIX|IMPROVE|NEW|BREAK)\]\s*(.+)/);
@@ -89,12 +95,16 @@ module.exports = {
 	},
 
 	getExternalContributors(prs, {data}) {
+		prs = removeDuplicates(prs);
+
 		return _.compact(_.difference(prs.reduce((value, pr) => {
 			return _.unique(value.concat(pr.contributors));
 		}, []), data.root.teamMembers, systemUsers)).sort();
 	},
 
 	getTeamContributors(prs, {data}) {
+		prs = removeDuplicates(prs);
+
 		return _.compact(_.intersection(prs.reduce((value, pr) => {
 			return _.unique(value.concat(pr.contributors));
 		}, []), data.root.teamMembers)).sort();

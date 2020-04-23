@@ -71,24 +71,6 @@ function getLatestCommitDate() {
 	return execSync('git log --date=short --format=\'%ad\' -1').toString().replace(/\n/, '');
 }
 
-function renderPRs(prs, owner, repo, release, tag, tagDate, releaseCandidate) {
-	// remove duplicated PR entries
-	prs = prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
-
-	return {
-		data: template({
-			teamMembers,
-			release,
-			prs,
-			owner,
-			repo,
-			tag,
-			tagDate,
-			releaseCandidate
-		}).replace(/\n$/, '')
-	};
-}
-
 function sort(a, b) {
 	if (a === 'HEAD') {
 		return -1;
@@ -106,29 +88,27 @@ function sort(a, b) {
 	return 0;
 }
 
-const renderVersion = (releases) => {
-	if (!releases) {
-		return '';
-	}
-	return releases.map((release) => release.body);
-};
-
-const getVersionObj = (release, tag, title, owner, repo, releaseCandidate = false) => {
-	const { pull_requests, rcs } = release;
+const renderRelease = (release, tag, title, owner, repo, releaseCandidate = false) => {
+	const { pull_requests: prs, rcs } = release;
 
 	const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
 
-	const { data } = renderPRs(pull_requests, owner, repo, release, tag, tagDate, releaseCandidate);
-
-	const version = {
-		body: data
-	};
+	let body = template({
+		teamMembers,
+		release,
+		prs,
+		owner,
+		repo,
+		tag,
+		tagDate,
+		releaseCandidate
+	}).replace(/\n$/, '');
 
 	if (rcs) {
-		version.body += rcs.reverse().map((rc) => renderVersion([getVersionObj(rc, rc.tag, title, owner, repo, true)])).join('\n');
+		body += rcs.reverse().map((rc) => renderRelease(rc, rc.tag, title, owner, repo, true)).join('\n');
 	}
 
-	return version;
+	return body;
 };
 
 const readHistoryFile = () => {
@@ -213,11 +193,11 @@ module.exports = async function({tag, write = true, title = true, owner, repo} =
 			const { pull_requests, rcs } = historyDataReleases[tag];
 			return pull_requests.length || rcs.length;
 		})
-		.map((tag) => getVersionObj(historyDataReleases[tag], tag, title, owner, repo), historyDataReleases[tag]));
+		.map((tag) => renderRelease(historyDataReleases[tag], tag, title, owner, repo), historyDataReleases[tag]));
 
-	const file = renderVersion(releases);
+	const file = releases.join('\n');
 
-	write && fs.writeFileSync(historyFile, file.join('\n'));
+	write && fs.writeFileSync(historyFile, file);
 
-	return file.join('\n');
+	return file;
 };
