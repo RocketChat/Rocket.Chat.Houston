@@ -41,6 +41,8 @@ module.exports = {
 		prs = removeDuplicates(prs);
 
 		prs.forEach(pr => {
+			// TODO temporary
+			pr.title = pr.title.replace('[ENTERPRISE]', '**Enterprise:**');
 			const match = pr.title.match(/\[(FIX|IMPROVE|NEW|BREAK)\]\s*(.+)/);
 			if (match) {
 				pr.title = match[2];
