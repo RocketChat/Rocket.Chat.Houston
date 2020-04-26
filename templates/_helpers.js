@@ -75,7 +75,7 @@ module.exports = {
 	},
 
 	description(pr) {
-		return pr.description.replace(/(?=([*-]\s|\d+\.\s))/gm, '  ').replace(/^(?=[^\s])/gm, '  ');
+		return pr.description.replace(/(?=(^|\s)([*-]\s|\d+\.\s))/gm, '  ').replace(/^(?=[^\s])/gm, '  ');
 	},
 
 	getSummary({groupedPRs, externalContributors, teamContributors}) {
