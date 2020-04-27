@@ -24,6 +24,19 @@ function removeDuplicates(prs) {
 	return prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
 }
 
+const sort = (a, b) => {
+	const am = a.title.match(/^\*\*\w+:\*\*/gm);
+	const bm = b.title.match(/^\*\*\w+:\*\*/gm);
+	if (am && !bm) {
+		return -1;
+	}
+	if (!am && bm) {
+		return 1;
+	}
+
+	return 0;
+};
+
 module.exports = {
 	let(data, name, value) {
 		data[name] = value;
@@ -41,18 +54,17 @@ module.exports = {
 		prs = removeDuplicates(prs);
 
 		prs.forEach(pr => {
-			// TODO temporary
-			pr.title = pr.title.replace('[ENTERPRISE]', '**Enterprise:**');
 			const match = pr.title.match(/\[(FIX|IMPROVE|NEW|BREAK)\]\s*(.+)/);
 			if (match) {
 				pr.title = match[2];
+				pr.title = pr.title.replace(/^\[(\w+)\]/, '**$1:**');
 				groups[match[1]].push(pr);
 			} else {
 				groups.NOGROUP.push(pr);
 			}
 		});
 
-		return Object.entries(groups).map(([key, values]) => ({key, values}));
+		return Object.entries(groups).map(([key, values]) => ({key, values: values.sort(sort)}));
 	},
 
 	groupTitle(group) {
