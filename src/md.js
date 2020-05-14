@@ -1,9 +1,56 @@
 const path = require('path');
 const fs = require('fs');
 const semver = require('semver');
-const _ = require('underscore');
 const execSync = require('child_process').execSync;
 const octokit = require('@octokit/rest')();
+
+const Handlebars = require('handlebars');
+
+const H = require('just-handlebars-helpers');
+
+H.registerHelpers(Handlebars);
+
+function loadHelpers(helpers) {
+	Object.entries(helpers).forEach(([name, helper]) => {
+		if (Handlebars.helpers[name]) {
+			name = `_${ name }`;
+		}
+		Handlebars.registerHelper(name, helper);
+	});
+}
+
+function loadTemplatesFromDir(dir) {
+	fs.readdirSync(dir).forEach((file) => {
+		if (file.endsWith('.hbs')) {
+			let name = file.replace('.hbs', '');
+			if (Handlebars.partials[name]) {
+				name = `_${ name }`;
+			}
+			Handlebars.registerPartial(name, fs.readFileSync(path.join(dir, file)).toString());
+		}
+
+		if (file.endsWith('.js')) {
+			const helpers = require(path.join(dir, file));
+			if (typeof helpers === 'function') {
+				loadHelpers({
+					[file.replace('.js', '')]: helpers
+				});
+			} else if (typeof helpers === 'object') {
+				loadHelpers(helpers);
+			}
+		}
+	});
+}
+
+try {
+	loadTemplatesFromDir(path.resolve(process.cwd(), '.houston/templates'));
+} catch (e) {
+	//
+}
+
+loadTemplatesFromDir(path.resolve(__dirname, '../templates'));
+
+const template = Handlebars.compile('{{> changelog}}');
 
 const historyDataFile = path.join(process.cwd(), '.github/history.json');
 const historyManualDataFile = path.join(process.cwd(), '.github/history-manual.json');
@@ -14,147 +61,12 @@ octokit.authenticate({
 	token: process.env.GITHUB_TOKEN
 });
 
-const systemUsers = ['web-flow'];
-let nonContributors = [];
-
-const GroupNames = {
-	IMPROVE: '### 🚀 Improvements',
-	FIX: '### 🐛 Bug fixes',
-	NEW: '### 🎉 New features',
-	BREAK: '### ⚠️ BREAKING CHANGES',
-	MINOR: '🔍 Minor changes'
-};
-
-const SummaryNameEmoticons = {
-	IMPROVE: '🚀',
-	FIX: '🐛',
-	NEW: '🎉',
-	BREAK: '️️️⚠️',
-	NOGROUP: '🔍',
-	contributor: '👩‍💻👨‍💻'
-};
-
-function groupPRs(prs) {
-	const groups = {
-		BREAK: [],
-		NEW: [],
-		IMPROVE: [],
-		FIX: [],
-		NOGROUP: []
-	};
-
-	prs.forEach(pr => {
-		const match = pr.title.match(/\[(FIX|IMPROVE|NEW|BREAK)\]\s*(.+)/);
-		if (match) {
-			pr.title = match[2];
-			groups[match[1]].push(pr);
-		} else {
-			groups.NOGROUP.push(pr);
-		}
-	});
-
-	return groups;
-}
-
 function getTagDate(tag) {
 	return execSync(`git tag -l --format="%(creatordate:short)" ${ tag }`).toString().replace(/\n/, '');
 }
 
 function getLatestCommitDate() {
 	return execSync('git log --date=short --format=\'%ad\' -1').toString().replace(/\n/, '');
-}
-
-function getSummary(contributors, teamContributors, groupedPRs) {
-	const summary = [];
-
-	Object.keys(groupedPRs).forEach(group => {
-		if (groupedPRs[group].length) {
-			summary.push(`${ groupedPRs[group].length } ${ SummaryNameEmoticons[group] }`);
-		}
-	});
-
-	if (contributors.length + teamContributors.length) {
-		summary.push(`${ contributors.length + teamContributors.length } ${ SummaryNameEmoticons.contributor }`);
-	}
-
-	if (summary.length) {
-		return `  ·  ${ summary.join('  ·  ') }`;
-	}
-
-	return '';
-}
-
-function renderPRs(prs, owner, repo) {
-
-	// remove duplicated PR entries
-	prs = prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
-
-	const data = [];
-	const groupedPRs = groupPRs(prs);
-
-	Object.keys(groupedPRs).forEach(group => {
-		const prs = groupedPRs[group];
-		if (!prs.length) {
-			return;
-		}
-
-		const groupName = GroupNames[group];
-
-		if (group === 'NOGROUP') {
-			data.push(`\n<details>\n<summary>${ GroupNames.MINOR }</summary>\n`);
-		} else {
-			data.push(`\n${ groupName }\n`);
-		}
-		prs.forEach(pr => {
-			let contributors = _.compact(_.difference(pr.contributors, nonContributors, systemUsers))
-				.sort()
-				.map(contributor => `[@${ contributor }](https://github.com/${ contributor })`)
-				.join(' & ');
-
-			if (contributors) {
-				contributors = ` by ${ contributors }`;
-			}
-
-			const prInfo = pr.pr ? ` ([#${ pr.pr }](https://github.com/${ owner }/${ repo }/pull/${ pr.pr })${ contributors })` : '';
-			data.push(`\n- ${ pr.title }${ prInfo }`);
-
-			if (pr.description) {
-				data.push(pr.description.replace(/(?=([*-]\s|\d+\.\s))/gm, '  ').replace(/^(?=[^\s])/gm, '  '));
-			}
-		});
-		if (group === 'NOGROUP') {
-			data.push('\n</details>');
-		}
-	});
-
-	const contributors = _.compact(_.difference(prs.reduce((value, pr) => {
-		return _._.unique(value.concat(pr.contributors));
-	}, []), nonContributors, systemUsers));
-
-	const teamContributors = _.compact(_.intersection(prs.reduce((value, pr) => {
-		return _.unique(value.concat(pr.contributors));
-	}, []), nonContributors));
-
-	if (contributors.length) {
-		// TODO: Improve list like https://gist.github.com/paulmillr/2657075/
-		data.push('\n### 👩‍💻👨‍💻 Contributors 😍\n');
-		contributors.sort().forEach(contributor => {
-			data.push(`- [@${ contributor }](https://github.com/${ contributor })`);
-		});
-	}
-
-	if (teamContributors.length) {
-		// TODO: Improve list like https://gist.github.com/paulmillr/2657075/
-		data.push('\n### 👩‍💻👨‍💻 Core Team 🤓\n');
-		teamContributors.sort().forEach(contributor => {
-			data.push(`- [@${ contributor }](https://github.com/${ contributor })`);
-		});
-	}
-
-	return {
-		data,
-		summary: getSummary(contributors, teamContributors, groupedPRs)
-	};
 }
 
 function sort(a, b) {
@@ -174,49 +86,6 @@ function sort(a, b) {
 	return 0;
 }
 
-const renderVersion = (releases) => {
-	if (!releases) {
-		return '';
-	}
-	return releases.map((release) =>
-		`\n${ release.title }` +
-		`${ release.summary !== '' ? `\n${ release.summary }` : '' }` +
-		`\n${ release.body }`);
-};
-
-const getVersionObj = (release, tag, title, owner, repo, tagPrefix = '#') => {
-	const { pull_requests, rcs, noMainRelease } = release;
-
-	const tagDate = tag === 'HEAD' ? getLatestCommitDate() : (getTagDate(tag) || getLatestCommitDate());
-
-	const { data, summary } = renderPRs(pull_requests, owner, repo);
-
-	const tagText = tag === 'HEAD' ? 'Next' : tag;
-
-	const version = {
-		title: '',
-		summary: '',
-		body: data.join('\n')
-	};
-
-	if (noMainRelease) {
-		if (title) {
-			version.title = `${ tagPrefix } ${ tagText } (Under Release Candidate Process)`;
-		}
-	} else {
-		if (title) {
-			version.title = `${ tagPrefix } ${ tagText }`;
-		}
-		version.summary = `\`${ tagDate }${ summary }\``;
-	}
-
-	if (rcs) {
-		version.body += rcs.reverse().map((rc) => renderVersion([getVersionObj(rc, rc.tag, title, owner, repo, '##')])).join('\n');
-	}
-
-	return version;
-};
-
 const readHistoryFile = () => {
 	try {
 		return JSON.parse(fs.readFileSync(historyDataFile).toString()).releases;
@@ -234,10 +103,10 @@ const readManualFile = () => {
 	}
 };
 
-module.exports = async function({tag, write = true, title = true, customMarkdown = (md) => Promise.resolve(md), owner, repo} = {}) {
+module.exports = async function({tag, write = true, title = true, owner, repo} = {}) {
 	const membersResult = await octokit.orgs.listMembers({org: owner, per_page: 100});
-	nonContributors = membersResult.data.map(i => i.login);
-	if (nonContributors.length === 100) {
+	const teamMembers = membersResult.data.map(i => i.login);
+	if (teamMembers.length === 100) {
 		console.log('Need to implement pagination for members list');
 	}
 
@@ -267,8 +136,9 @@ module.exports = async function({tag, write = true, title = true, customMarkdown
 		historyDataReleases[tag].pull_requests.unshift(...historyManualData[tag].map((pr) => ({ manual: true, ...pr })));
 	});
 
-	Object.values(historyDataReleases).forEach(value => {
+	Object.entries(historyDataReleases).forEach(([tag, value]) => {
 		value.rcs = [];
+		value.tagDate = value.tagDate || getTagDate(tag);
 	});
 
 	Object.keys(historyDataReleases).forEach(tag => {
@@ -276,6 +146,7 @@ module.exports = async function({tag, write = true, title = true, customMarkdown
 			const mainTag = tag.replace(/-rc.*/, '');
 			historyDataReleases[mainTag] = historyDataReleases[mainTag] || {
 				noMainRelease: true,
+				tagDate: getTagDate(mainTag),
 				pull_requests: [],
 				rcs: []
 			};
@@ -283,6 +154,7 @@ module.exports = async function({tag, write = true, title = true, customMarkdown
 			if (historyDataReleases[mainTag].noMainRelease) {
 				historyDataReleases[mainTag].rcs.push({
 					tag,
+					tagDate: getTagDate(tag),
 					pull_requests: historyDataReleases[tag].pull_requests
 				});
 			} else {
@@ -293,17 +165,29 @@ module.exports = async function({tag, write = true, title = true, customMarkdown
 		}
 	});
 
+	const lastCommitDate = getLatestCommitDate();
+
 	const releases = await Promise.all(Object.keys(historyDataReleases)
 		.sort(sort)
 		.filter((tag) => {
 			const { pull_requests, rcs } = historyDataReleases[tag];
 			return pull_requests.length || rcs.length;
 		})
-		.map((tag) => customMarkdown(getVersionObj(historyDataReleases[tag], tag, title, owner, repo), historyDataReleases[tag])));
+		.map((tag) => ({
+			release: historyDataReleases[tag],
+			tag
+		})));
 
-	const file = renderVersion(releases);
+	const file = template({
+		teamMembers,
+		releases,
+		owner,
+		repo,
+		showTitle: title,
+		lastCommitDate
+	}).replace(/\n$/, '');
 
-	write && fs.writeFileSync(historyFile, file.join('\n'));
+	write && fs.writeFileSync(historyFile, file);
 
-	return file.join('\n');
+	return file;
 };

@@ -1,0 +1,9 @@
+{{~let . 'groupedPRs' (groupedPRs release.pull_requests)}}
+{{~let . 'externalContributors' (getExternalContributors release.pull_requests)}}
+{{~let . 'teamContributors' (getTeamContributors release.pull_requests)}}
+{{> header}}
+{{> summary}}
+{{> prs}}
+{{> contributors contributors=externalContributors title='### 👩‍💻👨‍💻 Contributors 😍'}}
+{{> contributors contributors=teamContributors title='### 👩‍💻👨‍💻 Core Team 🤓'}}
+{{> rcs}}

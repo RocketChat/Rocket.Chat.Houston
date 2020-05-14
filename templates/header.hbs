@@ -1,0 +1,3 @@
+{{#if showTitle}}
+{{#if releaseCandidate}}#{{/if}}# {{#if (eq tag 'HEAD')}}Next{{else}}{{ tag }}{{/if}}{{#if release.noMainRelease}} (Under Release Candidate Process){{/if}}
+{{/if}}
