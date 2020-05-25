@@ -25,8 +25,8 @@ function removeDuplicates(prs) {
 }
 
 const sort = (a, b) => {
-	const am = a.title.match(/^\*\*\w+:\*\*/gm);
-	const bm = b.title.match(/^\*\*\w+:\*\*/gm);
+	const am = a.title.match(/^\*\*.+?:\*\*/gm);
+	const bm = b.title.match(/^\*\*.+?:\*\*/gm);
 	if (am && !bm) {
 		return -1;
 	}
@@ -57,7 +57,7 @@ module.exports = {
 			const match = pr.title.match(/\[(FIX|IMPROVE|NEW|BREAK)\]\s*(.+)/);
 			if (match) {
 				pr.title = match[2];
-				pr.title = pr.title.replace(/^\[(\w+)\]/, '**$1:**');
+				pr.title = pr.title.replace(/^\[\s*(.+?)\s*\]/, '**$1:**');
 				groups[match[1]].push(pr);
 			} else {
 				groups.NOGROUP.push(pr);
