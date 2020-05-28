@@ -11,10 +11,11 @@ updateNotifier({pkg}).notify();
 
 const logs = require('../src/logs');
 const md = require('../src/md');
+const pr = require('../src/pr');
 const setVersion = require('../src/set-version');
 
 const getRepoInfo = async() => {
-	const remote = await git.listRemote(['--get-url']);
+	const remote = await git.listRemote(['--get-url', 'origin']);
 
 	const info = gitUrlParse(remote);
 
@@ -53,6 +54,14 @@ program
 	.description('Release a new version')
 	.action(async function() {
 		setVersion(await getRepoInfo(), getMetadata);
+	});
+
+program
+	.command('pr')
+	.description('Clone github pull request by number')
+	.option('-f, --finish', 'Delete branch and remote')
+	.action(async function(prNumber, {finish}) {
+		pr({ ...await getRepoInfo(), prNumber, finish: Boolean(finish) });
 	});
 
 program.parse(process.argv);

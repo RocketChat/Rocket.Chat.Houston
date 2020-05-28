@@ -26,7 +26,7 @@
     "just-handlebars-helpers": "^1.0.17",
     "progress": "^2.0.3",
     "semver": "^5.6.0",
-    "simple-git": "^1.107.0",
+    "simple-git": "^2.5.0",
     "underscore": "^1.9.1",
     "update-notifier": "^2.5.0"
   },
@@ -34,5 +34,7 @@
     "url": "https://github.com/RocketChat/Rocket.Chat.Houston/issues"
   },
   "homepage": "https://github.com/RocketChat/Rocket.Chat.Houston#readme",
-  "devDependencies": {}
+  "devDependencies": {
+    "@octokit/types": "^4.0.2"
+  }
 }
