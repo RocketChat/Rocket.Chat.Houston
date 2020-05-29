@@ -61,7 +61,14 @@ program
 	.description('Clone github pull request by number')
 	.option('-f, --finish', 'Delete branch and remote')
 	.action(async function(prNumber, {finish}) {
-		pr({ ...await getRepoInfo(), prNumber, finish: Boolean(finish) });
+		pr.checkout({ ...await getRepoInfo(), prNumber, finish: Boolean(finish) });
+	});
+
+program
+	.command('pr-dirty')
+	.description('Update label of pull requests with conflict')
+	.action(async function(prNumber) {
+		pr.checkDirty({ ...await getRepoInfo(), prNumber });
 	});
 
 program.parse(process.argv);

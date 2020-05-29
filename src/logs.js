@@ -4,7 +4,9 @@ const semver = require('semver');
 const ProgressBar = require('progress');
 const _ = require('underscore');
 const git = require('simple-git/promise')(process.cwd());
-const octokit = require('@octokit/rest')();
+const { Octokit } = require('@octokit/rest');
+
+const octokit = new Octokit();
 
 const commitRegexString = '(^Merge pull request #([0-9]+) from )|( \\(#([0-9]+)\\)$)';
 const commitRegex = new RegExp(commitRegexString);
@@ -49,7 +51,7 @@ if (!historyData.version) {
 	};
 }
 
-octokit.authenticate({
+octokit.auth({
 	type: 'token',
 	token: process.env.GITHUB_TOKEN
 });
