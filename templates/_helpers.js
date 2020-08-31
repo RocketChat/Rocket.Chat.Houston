@@ -25,16 +25,7 @@ function removeDuplicates(prs) {
 }
 
 const sort = (a, b) => {
-	const am = a.title.match(/^\*\*.+?:\*\*/gm);
-	const bm = b.title.match(/^\*\*.+?:\*\*/gm);
-	if (am && !bm) {
-		return -1;
-	}
-	if (!am && bm) {
-		return 1;
-	}
-
-	return 0;
+	return a.title.localeCompare(b.title);
 };
 
 module.exports = {
