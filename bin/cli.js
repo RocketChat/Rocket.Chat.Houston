@@ -11,7 +11,7 @@ updateNotifier({pkg}).notify();
 
 const logs = require('../src/logs');
 const md = require('../src/md');
-const support = require('../src/support');
+const releaseTable = require('../src/release-table');
 const setVersion = require('../src/set-version');
 
 const getRepoInfo = async() => {
@@ -57,10 +57,10 @@ program
 	});
 
 program
-	.command('support')
-	.description('List of supported versions')
+	.command('release-table')
+	.description('Generate a markdown table of supported versions')
 	.action(async function() {
-		support({ ...await getRepoInfo() });
+		releaseTable({ ...await getRepoInfo() });
 	});
 
 program
