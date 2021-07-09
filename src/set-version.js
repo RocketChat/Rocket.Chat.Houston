@@ -5,7 +5,7 @@ const semver = require('semver');
 const inquirer = require('inquirer');
 const git = require('simple-git/promise')(process.cwd());
 const logs = require('./logs');
-const Octokit = require('@octokit/rest');
+const { Octokit } = require('@octokit/rest');
 const md = require('../src/md');
 
 const octokit = new Octokit({
@@ -569,7 +569,7 @@ class Houston {
 		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 		if (answers.create) {
 			console.log('Creating pull request');
-			const pr = await octokit.pullRequests.create({
+			const pr = await octokit.pulls.create({
 				owner: this.owner,
 				repo: this.repo,
 				title: `Release ${ this.version }`,
@@ -593,7 +593,7 @@ class Houston {
 
 		if (answers.create) {
 			console.log('Creating pull request');
-			const pr = await octokit.pullRequests.create({
+			const pr = await octokit.pulls.create({
 				owner: this.owner,
 				repo: this.repo,
 				title: `Merge master into develop & Set version to ${ this.version }`,

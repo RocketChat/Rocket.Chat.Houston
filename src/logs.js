@@ -4,7 +4,7 @@ const semver = require('semver');
 const ProgressBar = require('progress');
 const _ = require('underscore');
 const git = require('simple-git/promise')(process.cwd());
-const Octokit = require('@octokit/rest');
+const { Octokit } = require('@octokit/rest');
 
 const commitRegexString = '(^Merge pull request #([0-9]+) from )|( \\(#([0-9]+)\\)$)';
 const commitRegex = new RegExp(commitRegexString);
@@ -103,7 +103,7 @@ function getPRInfo(number, commit) {
 		process.exit(1);
 	}
 
-	return promiseRetryRateLimit(() => octokit.pullRequests.get({owner, repo, pull_number: number}))
+	return promiseRetryRateLimit(() => octokit.pulls.get({owner, repo, pull_number: number}))
 		.catch(onError)
 		.then(pr => {
 			if (pr === undefined) {
@@ -128,7 +128,7 @@ function getPRInfo(number, commit) {
 				info.milestone = pr.data.milestone.title;
 			}
 
-			return promiseRetryRateLimit(() => octokit.pullRequests.listCommits({owner, repo, pull_number: number}))
+			return promiseRetryRateLimit(() => octokit.pulls.listCommits({owner, repo, pull_number: number}))
 				.catch(onError)
 				.then(commits => {
 					info.contributors = _.unique(_.flatten(commits.data.map(i => {
@@ -189,11 +189,6 @@ async function getPullRequests(from, to) {
 	const log = await git.log(logParams);
 
 	const items = log.all
-		.filter(item => /^(\*\s)[0-9a-z]+$/.test(item.hash))
-		.map(item => {
-			item.hash = item.hash.replace(/^(\*\s)/, '');
-			return item;
-		})
 		.filter(item => commitRegex.test(item.message));
 
 	const data = [];

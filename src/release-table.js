@@ -1,4 +1,4 @@
-const Octokit = require('@octokit/rest');
+const { Octokit } = require('@octokit/rest');
 const semver = require('semver');
 
 const octokit = new Octokit({

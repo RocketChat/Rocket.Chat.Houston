@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const semver = require('semver');
 const execSync = require('child_process').execSync;
-const Octokit = require('@octokit/rest');
+const { Octokit } = require('@octokit/rest');
 
 const Handlebars = require('handlebars');
 
