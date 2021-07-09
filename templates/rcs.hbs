@@ -1,0 +1,5 @@
+{{#if release.rcs ~}}
+{{~#each (reverse release.rcs)}}
+{{> release .. release=. tag=tag releaseCandidate=true}}
+{{/each~}}
+{{~/if}}

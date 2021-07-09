@@ -1,0 +1,18 @@
+{{#each groupedPRs}}
+{{#if values}}
+
+{{#if (neq key 'NOGROUP')}}
+{{ groupTitle key }}
+
+{{> pull_requests}}
+{{/if}}
+{{#if (eq key 'NOGROUP')}}
+<details>
+<summary>{{ groupTitle key }}</summary>
+
+{{> pull_requests}}
+
+</details>
+{{/if}}
+{{/if}}
+{{/each}}

@@ -6,7 +6,6 @@ const _ = require('underscore');
 const git = require('simple-git/promise')(process.cwd());
 const octokit = require('@octokit/rest')();
 
-const minTag = '0.55.0-rc.0';
 const commitRegexString = '(^Merge pull request #([0-9]+) from )|( \\(#([0-9]+)\\)$)';
 const commitRegex = new RegExp(commitRegexString);
 
@@ -54,8 +53,8 @@ octokit.authenticate({
 	type: 'token',
 	token: process.env.GITHUB_TOKEN
 });
-let owner = 'RocketChat';
-let repo = 'Rocket.Chat';
+let owner = '';
+let repo = '';
 
 function promiseRetryRateLimit(promiseFn, retryWait = 60000) {
 	return new Promise((resolve, reject) => {
@@ -160,8 +159,25 @@ function getPRNumberFromMessage(message, item) {
 	return number;
 }
 
+function getCommitRange(from, to) {
+	if (!from && !to) {
+		console.error('Invalid commits for range');
+		process.exit(1);
+	}
+
+	if (from && to) {
+		return `${ from }...${ to }`;
+	}
+
+	if (!from) {
+		return `${ to }^@`;
+	}
+
+	return `${ from }...HEAD`;
+}
+
 async function getPullRequests(from, to) {
-	const logParams = ['--no-decorate', '--graph', '-E', `--grep=${ commitRegexString }`, `${ from }...${ to }`];
+	const logParams = ['--no-decorate', '--graph', '-E', `--grep=${ commitRegexString }`, getCommitRange(from, to)];
 	logParams.format = {
 		hash: '%H',
 		date: '%ai',
@@ -219,7 +235,7 @@ async function getCurrentLatestTag() {
 	return (await git.raw(['describe', '--abbrev=0', '--tags'])).replace(/\n/, '');
 }
 
-async function getTags() {
+async function getTags({ minTag }) {
 	let tags = await git.tags();
 
 	tags = tags.all.filter(tag => /^\d+\.\d+\.\d+(-rc\.\d+)?$/.test(tag));
@@ -246,15 +262,15 @@ async function getTags() {
 				before: index ? tags[--index] : null
 			};
 		})
-		.filter(item => item.tag === 'HEAD' || semver.gte(item.tag, minTag))
+		.filter(item => item.tag === 'HEAD' || !minTag || semver.gte(item.tag, minTag))
 		.reduce((value, item) => {
 			value[item.tag] = item;
 			return value;
 		}, {});
 }
 
-async function getMissingTags() {
-	const tags = await getTags();
+async function getMissingTags({ minTag }) {
+	const tags = await getTags({ minTag });
 	const missingTags = _.difference(Object.keys(tags), Object.keys(historyData.releases));
 
 	missingTags.push('HEAD');
@@ -262,47 +278,12 @@ async function getMissingTags() {
 	return _.pick(tags, missingTags);
 }
 
-async function getEngineVersions(version) {
-	let circleConfig = '';
-	try {
-		circleConfig = await git.show([`${ version }:.circleci/config.yml`]);
-	} catch (e) {
-		console.error(e);
-	}
-
-	let meteorRelease = '';
-	try {
-		meteorRelease = await git.show([`${ version }:.meteor/release`]);
-	} catch (e) {
-		console.error(e);
-	}
-
-	if (!/^METEOR@(\d+\.){1,2}\d/.test(meteorRelease)) {
-		return {};
-	}
-
-	const meteorVersion = meteorRelease.replace(/\n|\s/g, '');
-
-	try {
-		const requestResult = await request(`https://raw.githubusercontent.com/meteor/meteor/release/${ meteorVersion }/scripts/build-dev-bundle-common.sh`);
-
-		return {
-			node_version: requestResult.match(/NODE_VERSION=((?:\d+\.){2}\d)/m)[1],
-			npm_version: requestResult.match(/NPM_VERSION=((?:\d+\.){2}\d)/m)[1],
-			mongo_versions: _.uniq(circleConfig.match(/mongo:(\d.){1,2}\d/g)).map(i => i.replace('mongo:', ''))
-		};
-	} catch (error) {
-		console.log(error);
-		return {};
-	}
-}
-
-module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:_repo = 'Rocket.Chat'}) {
+module.exports = function({headName = 'HEAD', owner:_owner = '', repo:_repo = '', minTag = '', getMetadata = () => Promise.resolve({}) }) {
 	owner = _owner;
 	repo = _repo;
 
 	return new Promise((resolve) => {
-		getMissingTags().then(missingTags => {
+		getMissingTags({ minTag }).then(missingTags => {
 			console.log('Missing tags:');
 			console.log(JSON.stringify(Object.keys(missingTags), null, 2));
 			missingTags = Object.values(missingTags);
@@ -325,12 +306,12 @@ module.exports = function({headName = 'HEAD', owner:_owner = 'RocketChat', repo:
 				const to = item.tag;
 				console.log('Fetching data for tag:', to, `(from ${ from })`);
 				getPullRequests(from, to).then(pull_requests => {
-					getEngineVersions(to).then(versions => {
+					getMetadata({ version: to, git, request }).then(metadata => {
 						pull_requests = _.compact(pull_requests);
 						// console.log('  ', pull_requests.length, 'item(s) found');
 						historyData.releases = Object.assign(historyData.releases, {
 							[to]: {
-								...versions,
+								...metadata,
 								pull_requests
 							}
 						});
