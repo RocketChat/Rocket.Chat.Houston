@@ -26,11 +26,14 @@ class Houston {
 	constructor({
 		owner,
 		repo,
-		version
+		version,
+		getMetadata
 	} = {}) {
 		this.owner = owner;
 		this.repo = repo;
 		this.version = version;
+		this.minTag = '';
+		this.getMetadata = getMetadata;
 
 		if (!this.version) {
 			this.readVersionFromPackageJson();
@@ -70,6 +73,10 @@ class Houston {
 			houston.updateFiles.forEach((file) => {
 				files.push(file);
 			});
+		}
+
+		if (houston.minTag) {
+			this.minTag = houston.minTag;
 		}
 	}
 
@@ -451,8 +458,8 @@ class Houston {
 	}
 
 	async updateHistory() {
-		await logs({headName: this.version/*, owner: this.owner, repo: this.repo*/});
-		await md();
+		await logs({headName: this.version, getMetadata: this.getMetadata, owner: this.owner, repo: this.repo, minTag: this.minTag });
+		await md({ owner: this.owner, repo: this.repo });
 		await this.shouldCommitFiles({amend: true});
 	}
 
@@ -496,7 +503,7 @@ class Houston {
 			name: 'pushTag'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false});
+		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 		if (answers.pushTag) {
 			try {
 				const release = await octokit.repos.getReleaseByTag({owner: this.owner, repo: this.repo, tag: this.version});
@@ -536,7 +543,7 @@ class Houston {
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false});
+		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 		if (answers.create) {
 			console.log('Creating draft release');
 			await octokit.repos.createRelease({
@@ -559,7 +566,7 @@ class Houston {
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false});
+		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 		if (answers.create) {
 			console.log('Creating pull request');
 			const pr = await octokit.pullRequests.create({
@@ -601,5 +608,8 @@ class Houston {
 	}
 }
 
-const houston = new Houston();
-houston.init().catch(error => console.error(error));
+module.exports = function({ owner, repo }, getMetadata) {
+	const houston = new Houston({ owner, repo, getMetadata });
+	houston.init().catch(error => console.error(error));
+};
+
