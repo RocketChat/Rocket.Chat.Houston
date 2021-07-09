@@ -11,10 +11,11 @@ updateNotifier({pkg}).notify();
 
 const logs = require('../src/logs');
 const md = require('../src/md');
+const releaseTable = require('../src/release-table');
 const setVersion = require('../src/set-version');
 
 const getRepoInfo = async() => {
-	const remote = await git.listRemote(['--get-url']);
+	const remote = await git.listRemote(['--get-url', 'origin']);
 
 	const info = gitUrlParse(remote);
 
@@ -32,13 +33,20 @@ try {
 	//
 }
 
+let repoPkg = {};
+try {
+	repoPkg = require(path.resolve(process.cwd(), './package.json'));
+} catch (e) {
+	//
+}
+
 program
 	.command('logs')
 	.description('Generate history.json')
 	.option('-h, --head_name <name>', 'Name of the new release. Will rename the current HEAD section')
 	.option('-t, --min_tag <tag>', 'Minimum tag to scrap the history')
 	.action(async function({head_name, min_tag}) {
-		logs({ ...await getRepoInfo(), headName: head_name, minTag: min_tag, getMetadata });
+		logs({headName: head_name, minTag: min_tag, ...await getRepoInfo(), ...repoPkg.houston, getMetadata });
 	});
 
 program
@@ -46,6 +54,13 @@ program
 	.description('Generate History.md from History.json')
 	.action(async function() {
 		md({ ...await getRepoInfo() });
+	});
+
+program
+	.command('release-table')
+	.description('Generate a markdown table of supported versions')
+	.action(async function() {
+		releaseTable({ ...await getRepoInfo() });
 	});
 
 program
