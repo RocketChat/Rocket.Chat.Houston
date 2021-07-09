@@ -1,9 +1,8 @@
-const octokit = require('@octokit/rest')();
+const Octokit = require('@octokit/rest');
 const semver = require('semver');
 
-octokit.authenticate({
-	type: 'token',
-	token: process.env.GITHUB_TOKEN
+const octokit = new Octokit({
+	auth: process.env.GITHUB_TOKEN
 });
 
 module.exports = async function({owner, repo} = {}) {
