@@ -6,7 +6,7 @@ const _ = require('underscore');
 const git = require('simple-git/promise')(process.cwd());
 const { Octokit } = require('@octokit/rest');
 
-const commitRegexString = '(^Merge pull request #([0-9]+) from )|( \\(#([0-9]+)\\)$)';
+const commitRegexString = '(^Merge pull request #([0-9]+) from )|( ?\\(?#([0-9]+)\\)?$)';
 const commitRegex = new RegExp(commitRegexString);
 
 const https = require('https');
