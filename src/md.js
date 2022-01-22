@@ -103,11 +103,10 @@ const readManualFile = () => {
 };
 
 module.exports = async function({tag, write = true, title = true, owner, repo} = {}) {
-	const membersResult = await octokit.orgs.listMembers({org: owner, per_page: 100});
-	const teamMembers = membersResult.data.map(i => i.login);
-	if (teamMembers.length === 100) {
-		console.log('Need to implement pagination for members list');
-	}
+	const data = await octokit.paginate(octokit.orgs.listMembers, {
+		org: owner,
+	});
+	const teamMembers = data.map(({ login }) => login);
 
 	let historyDataReleases = readHistoryFile();
 
