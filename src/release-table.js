@@ -40,7 +40,7 @@ module.exports = async function({owner, repo} = {}) {
 	}
 
 	releases[0].last = true;
-	for (const {tag_name, html_url, lts, last} of releases.reverse()) {
+	for (const {tag_name, html_url, lts, last} of releases) {
 		const minor = tag_name.replace(/\.\d+$/, '');
 		const releaseDate = new Date(releasesMap[`${ minor }.0`].published_at);
 		if (releaseDate.getDate() < 20) {
