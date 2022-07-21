@@ -575,7 +575,7 @@ class Houston {
 				title: `Release ${ this.version }`,
 				head: await this.currentBranch(),
 				base: 'master',
-				body
+				body: body.slice(0, 65536)
 			});
 			if (pr.data) {
 				console.log(`Pull Request created: ${ pr.data.title }`);
