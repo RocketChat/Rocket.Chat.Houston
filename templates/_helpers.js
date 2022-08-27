@@ -1,6 +1,6 @@
 const _ = require('underscore');
 
-const systemUsers = ['web-flow'];
+const systemUsers = ['web-flow', 'kodiakhq[bot]'];
 
 const SummaryNameEmoticons = {
 	IMPROVE: '🚀',
