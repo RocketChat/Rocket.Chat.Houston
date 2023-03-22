@@ -20,7 +20,7 @@
     "@octokit/rest": "^18.6.7",
     "commander": "^2.19.0",
     "eslint": "^7.30.0",
-    "git-url-parse": "^11.5.0",
+    "git-url-parse": "^13.1.0",
     "handlebars": "^4.7.7",
     "inquirer": "^5.2.0",
     "just-handlebars-helpers": "^1.0.18",
