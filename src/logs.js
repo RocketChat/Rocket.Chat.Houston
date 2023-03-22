@@ -5,6 +5,7 @@ const ProgressBar = require('progress');
 const _ = require('underscore');
 const git = require('simple-git/promise')(process.cwd());
 const { Octokit } = require('@octokit/rest');
+const { getMetadata } = require('./utils');
 
 const commitRegexString = '(^Merge pull request #([0-9]+) from )|( ?\\(?#([0-9]+)\\)?$)';
 const commitRegex = new RegExp(commitRegexString);
@@ -62,14 +63,14 @@ function promiseRetryRateLimit(promiseFn, retryWait = 60000) {
 			promiseFn()
 				.then(data => resolve(data))
 				.catch(error => {
-					if (error.headers['status'] === '403 Forbidden' && error.headers['retry-after']) {
-						const reset = error.headers['retry-after'];
+					if (error.response.headers['status'] === '403 Forbidden' && error.response.headers['retry-after']) {
+						const reset = error.response.headers['retry-after'];
 
 						console.error('Retrying in', reset, 'seconds');
 						console.log('Retrying in', reset, 'seconds');
 						setTimeout(exec, reset * 1000);
-					} else if (error.headers['x-ratelimit-remaining'] === '0') {
-						let reset = error.headers['x-ratelimit-reset'];
+					} else if (error.response.headers['x-ratelimit-remaining'] === '0') {
+						let reset = error.response.headers['x-ratelimit-reset'];
 						if (reset) {
 							reset = parseInt(reset) * 1000 - Date.now();
 						}
@@ -273,7 +274,7 @@ async function getMissingTags({ minTag }) {
 	return _.pick(tags, missingTags);
 }
 
-module.exports = function({headName = 'HEAD', owner:_owner = '', repo:_repo = '', minTag = '', getMetadata = () => Promise.resolve({}) }) {
+module.exports = function({headName = 'HEAD', owner:_owner = '', repo:_repo = '', minTag = '' }) {
 	owner = _owner;
 	repo = _repo;
 
@@ -301,7 +302,7 @@ module.exports = function({headName = 'HEAD', owner:_owner = '', repo:_repo = ''
 				const to = item.tag;
 				console.log('Fetching data for tag:', to, `(from ${ from })`);
 				getPullRequests(from, to).then(pull_requests => {
-					getMetadata({ version: to, git, request }).then(metadata => {
+					getMetadata()({ version: to, git, request }).then(metadata => {
 						pull_requests = _.compact(pull_requests);
 						// console.log('  ', pull_requests.length, 'item(s) found');
 						historyData.releases = Object.assign(historyData.releases, {

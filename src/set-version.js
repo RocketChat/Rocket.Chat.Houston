@@ -7,6 +7,7 @@ const git = require('simple-git/promise')(process.cwd());
 const logs = require('./logs');
 const { Octokit } = require('@octokit/rest');
 const md = require('../src/md');
+const { getMetadata } = require('./utils');
 
 const octokit = new Octokit({
 	auth: process.env.GITHUB_TOKEN
@@ -26,14 +27,12 @@ class Houston {
 	constructor({
 		owner,
 		repo,
-		version,
-		getMetadata
+		version
 	} = {}) {
 		this.owner = owner;
 		this.repo = repo;
 		this.version = version;
 		this.minTag = '';
-		this.getMetadata = getMetadata;
 
 		if (!this.version) {
 			this.readVersionFromPackageJson();
@@ -458,7 +457,7 @@ class Houston {
 	}
 
 	async updateHistory() {
-		await logs({headName: this.version, getMetadata: this.getMetadata, owner: this.owner, repo: this.repo, minTag: this.minTag });
+		await logs({headName: this.version, getMetadata: getMetadata(), owner: this.owner, repo: this.repo, minTag: this.minTag });
 		await md({ owner: this.owner, repo: this.repo });
 		await this.shouldCommitFiles({amend: true});
 	}
@@ -608,8 +607,8 @@ class Houston {
 	}
 }
 
-module.exports = function({ owner, repo }, getMetadata) {
-	const houston = new Houston({ owner, repo, getMetadata });
+module.exports = function({ owner, repo }) {
+	const houston = new Houston({ owner, repo });
 	houston.init().catch(error => console.error(error));
 };
 

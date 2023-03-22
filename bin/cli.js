@@ -25,14 +25,6 @@ const getRepoInfo = async() => {
 	};
 };
 
-let getMetadata = () => Promise.resolve({});
-
-try {
-	getMetadata = require(path.resolve(process.cwd(), '.houston/metadata.js'));
-} catch (e) {
-	//
-}
-
 let repoPkg = {};
 try {
 	repoPkg = require(path.resolve(process.cwd(), './package.json'));
@@ -46,7 +38,7 @@ program
 	.option('-h, --head_name <name>', 'Name of the new release. Will rename the current HEAD section')
 	.option('-t, --min_tag <tag>', 'Minimum tag to scrap the history')
 	.action(async function({head_name, min_tag}) {
-		logs({headName: head_name, minTag: min_tag, ...await getRepoInfo(), ...repoPkg.houston, getMetadata });
+		logs({headName: head_name, minTag: min_tag, ...await getRepoInfo(), ...repoPkg.houston });
 	});
 
 program
@@ -67,7 +59,7 @@ program
 	.command('release')
 	.description('Release a new version')
 	.action(async function() {
-		setVersion(await getRepoInfo(), getMetadata);
+		setVersion(await getRepoInfo());
 	});
 
 program.parse(process.argv);
