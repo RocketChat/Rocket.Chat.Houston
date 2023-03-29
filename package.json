@@ -28,7 +28,7 @@
     "semver": "^7.3.5",
     "simple-git": "^2.40.0",
     "underscore": "^1.13.1",
-    "update-notifier": "^2.5.0"
+    "update-notifier": "^6.0.2"
   },
   "bugs": {
     "url": "https://github.com/RocketChat/Rocket.Chat.Houston/issues"
