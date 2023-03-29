@@ -1,12 +1,14 @@
 const path = require('path');
 const fs = require('fs');
-const { promisify } = require('util');
+const { open, readFile, writeFile } = require('fs/promises');
 const semver = require('semver');
 const inquirer = require('inquirer');
 const git = require('simple-git/promise')(process.cwd());
 const logs = require('./logs');
+const conventionalLogs = require('./conventional-logs');
 const { Octokit } = require('@octokit/rest');
 const md = require('../src/md');
+const conventionalMarkdown = require('../src/conventional-md');
 const { getMetadata } = require('./utils');
 
 const octokit = new Octokit({
@@ -14,9 +16,6 @@ const octokit = new Octokit({
 });
 
 const files = [];
-
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
 
 const {
 	PUSH_TAG_OPTIONS = '',
@@ -45,14 +44,20 @@ class Houston {
 		this.version = file.version;
 	}
 
-	async init() {
-		if (!await this.isClean()) {
-			throw new Error('Branch not synced or changes in files. Please run this only on clean stage.');
-		}
+	async init(flow) {
+		// if (!await this.isClean()) {
+		// 	throw new Error('Branch not synced or changes in files. Please run this only on clean stage.');
+		// }
 
 		await this.fetch();
 		await this.getRemote();
-		await this.selectAction();
+
+		if (flow === 'bump') {
+			await this.bumpFinalRelease();
+			return;
+		}
+
+		await this.selectAction(flow);
 	}
 
 	async isClean() {
@@ -215,7 +220,15 @@ class Houston {
 		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
 		await this.shouldCreateDraftReleaseWithHistory();
-		await this.shouldCreateReleasePullRequest();
+	}
+
+	async bumpFinalRelease() {
+		this.readVersionFromPackageJson();
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'minor'});
+		await this.updateVersionInFiles();
+		const changelog = await this.bumpHistory();
+		await this.shouldPushCurrentBranch();
+		await this.shouldCreateDraftReleaseWithHistory({ changelog });
 	}
 
 	async newFinalReleaseFromCherryPicks() {
@@ -462,6 +475,39 @@ class Houston {
 		await this.shouldCommitFiles({amend: true});
 	}
 
+	async bumpHistory() {
+		const { prs, metadata } = await conventionalLogs({
+			oldVersion: this.oldVersion,
+			version: this.version,
+			owner: this.owner,
+			repo: this.repo,
+			getMetadata: getMetadata()
+		});
+		const changelog = await conventionalMarkdown({
+			releases: [
+				{
+					tag: this.version,
+					release: {
+						...metadata,
+						pull_requests: prs
+					}
+				}
+			],
+			owner: this.owner,
+			repo: this.repo
+		});
+
+		const history = await readFile(path.join(process.cwd(), 'HISTORY.md'), 'utf8');
+
+		const fd = await open(path.join(process.cwd(), 'HISTORY.md'), 'w');
+		await fd.write(changelog + '\n' + history);
+		await fd.close();
+
+		await this.shouldCommitFiles({amend: true});
+
+		return changelog;
+	}
+
 	async shouldCommitFiles({amend = false} = {}) {
 		let answers = await inquirer.prompt([{
 			type: 'confirm',
@@ -535,14 +581,13 @@ class Houston {
 		}
 	}
 
-	async shouldCreateDraftReleaseWithHistory({branch = 'master'} = {}) {
+	async shouldCreateDraftReleaseWithHistory({ changelog: body, branch = 'master' } = {}) {
 		const answers = await inquirer.prompt([{
 			type: 'confirm',
 			message: `Create a GitHub draft release "${ this.version }"?`,
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 		if (answers.create) {
 			console.log('Creating draft release');
 			await octokit.repos.createRelease({
@@ -607,8 +652,8 @@ class Houston {
 	}
 }
 
-module.exports = function({ owner, repo }) {
+module.exports = function({ flow, owner, repo }) {
 	const houston = new Houston({ owner, repo });
-	houston.init().catch(error => console.error(error));
+	houston.init(flow).catch(error => console.error(error));
 };
 
