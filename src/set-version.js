@@ -53,7 +53,7 @@ class Houston {
 		await this.getRemote();
 
 		if (flow === 'bump') {
-			await this.bumpFinalRelease();
+			await this.bumpRelease();
 			return;
 		}
 
@@ -222,13 +222,75 @@ class Houston {
 		await this.shouldCreateDraftReleaseWithHistory();
 	}
 
-	async bumpFinalRelease() {
+	async bumpRelease() {
+		const { answer } = await inquirer.prompt([{
+			type: 'list',
+			message: 'Which action you want to execute?',
+			name: 'answer',
+			default: 'release',
+			choices: [{
+				name: 'Final Release', value: 'final'
+			// }, {
+			// 	name: 'Major Release', value: 'major'
+			}, {
+				name: 'Patch Release (patch)', value: 'patch'
+			}, {
+				name: 'Release Candidate (rc)', value: 'rc'
+			}, {
+				name: 'Beta Release (beta)', value: 'beta'
+			}]
+		}]);
+
+		const version = {
+			currentVersion: this.version,
+			release: 'patch'
+		};
+
+		if (answer === 'final') {
+			version.release = 'prerelease';
+		// } else if (answer === 'major') {
+		// 	version.release = 'premajor';
+		} else if (answer === 'beta') {
+			version.release = 'prerelease';
+			version.identifier = 'beta';
+		} else if (answer === 'rc') {
+			version.release = 'prerelease';
+			version.identifier = 'rc';
+		// } else if (type === 'release-from-cherry-picks') {
+		// 	version.release = 'patch';
+		}
+
 		this.readVersionFromPackageJson();
-		await this.selectVersionToUpdate({currentVersion: this.version, release: 'minor'});
+		await this.selectVersionToUpdate(version);
 		await this.updateVersionInFiles();
-		const changelog = await this.bumpHistory();
+		const changelog = await this.createChangelog(this.previousVersion);
+
+		// write changelog to history only when cutting the final release
+		if (['final', 'patch'].includes(answer)) {
+			const history = await readFile(path.join(process.cwd(), 'HISTORY.md'), 'utf8');
+
+			const fd = await open(path.join(process.cwd(), 'HISTORY.md'), 'w');
+			await fd.write(`#${this.version}\n` + changelog + '\n' + history);
+			await fd.close();
+
+			await this.shouldCommitFiles({amend: true});
+		}
+
 		await this.shouldPushCurrentBranch();
-		await this.shouldCreateDraftReleaseWithHistory({ changelog });
+
+		const releaseOptions = {
+			changelog
+		};
+
+		if (answer === 'rc') {
+			await this.shouldAddTag();
+			releaseOptions.prerelease = true;
+		} else {
+			await this.shouldCreateReleasePullRequest({ changelog });
+			releaseOptions.draft = true;
+		}
+
+		await this.shouldCreateRelease(releaseOptions);
 	}
 
 	async newFinalReleaseFromCherryPicks() {
@@ -446,6 +508,8 @@ class Houston {
 		}
 
 		const { version } = answers;
+		// TODO it should not be master here, but the previous version (either the version from master or a previous release-candidate)
+		this.previousVersion = this.version.includes('-develop') ? 'master' : this.version;
 		this.oldVersion = this.version;
 		this.version = version;
 		return version;
@@ -475,35 +539,23 @@ class Houston {
 		await this.shouldCommitFiles({amend: true});
 	}
 
-	async bumpHistory() {
+	async createChangelog(oldVersion) {
 		const { prs, metadata } = await conventionalLogs({
-			oldVersion: this.oldVersion,
+			oldVersion: oldVersion || this.oldVersion,
 			version: this.version,
 			owner: this.owner,
 			repo: this.repo,
 			getMetadata: getMetadata()
 		});
 		const changelog = await conventionalMarkdown({
-			releases: [
-				{
-					tag: this.version,
-					release: {
-						...metadata,
-						pull_requests: prs
-					}
-				}
-			],
+			tag: this.version,
+			release: {
+				...metadata,
+				pull_requests: prs
+			},
 			owner: this.owner,
 			repo: this.repo
 		});
-
-		const history = await readFile(path.join(process.cwd(), 'HISTORY.md'), 'utf8');
-
-		const fd = await open(path.join(process.cwd(), 'HISTORY.md'), 'w');
-		await fd.write(changelog + '\n' + history);
-		await fd.close();
-
-		await this.shouldCommitFiles({amend: true});
 
 		return changelog;
 	}
@@ -581,6 +633,9 @@ class Houston {
 		}
 	}
 
+	/**
+	 * @deprecated Use shouldCreateRelease instead
+	 */
 	async shouldCreateDraftReleaseWithHistory({ changelog: body, branch = 'master' } = {}) {
 		const answers = await inquirer.prompt([{
 			type: 'confirm',
@@ -603,14 +658,37 @@ class Houston {
 		}
 	}
 
-	async shouldCreateReleasePullRequest() {
+	async shouldCreateRelease({ changelog: body, branch = 'master', draft, prerelease } = {}) {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Create a GitHub${draft ? ' draft' : ''} release "${ this.version }"?`,
+			name: 'create'
+		}]);
+
+		if (answers.create) {
+			console.log('Creating release');
+			await octokit.repos.createRelease({
+				owner: this.owner,
+				repo: this.repo,
+				tag_name: this.version,
+				target_commitish: branch,
+				name: this.version,
+				body,
+				...(draft && { draft: true }),
+				...(prerelease && { prerelease: true }),
+			});
+		}
+	}
+
+	async shouldCreateReleasePullRequest({ changelog } = {}) {
 		const answers = await inquirer.prompt([{
 			type: 'confirm',
 			message: `Create a GitHub Pull Request for release "${ this.version }"?`,
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
+		const body = changelog || await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
+
 		if (answers.create) {
 			console.log('Creating pull request');
 			const pr = await octokit.pulls.create({

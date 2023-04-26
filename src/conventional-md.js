@@ -49,13 +49,13 @@ try {
 
 loadTemplatesFromDir(path.resolve(__dirname, '../templates'));
 
-const template = Handlebars.compile('{{> changelog}}');
+const template = Handlebars.compile('{{> release}}');
 
 function getLatestCommitDate() {
 	return execSync('git log --date=short --format=\'%ad\' -1').toString().replace(/\n/, '');
 }
 
-module.exports = async function({releases, title = true, owner, repo} = {}) {
+module.exports = async function({tag, release, owner, repo} = {}) {
 	const octokit = new Octokit({
 		auth: process.env.GITHUB_TOKEN
 	});
@@ -69,10 +69,11 @@ module.exports = async function({releases, title = true, owner, repo} = {}) {
 
 	const file = template({
 		teamMembers,
-		releases,
+		tag,
+		release,
 		owner,
 		repo,
-		showTitle: title,
+		showTitle: false,
 		lastCommitDate
 	});
 
