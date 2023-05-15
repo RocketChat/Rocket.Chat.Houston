@@ -270,7 +270,7 @@ class Houston {
 			const history = await readFile(path.join(process.cwd(), 'HISTORY.md'), 'utf8');
 
 			const fd = await open(path.join(process.cwd(), 'HISTORY.md'), 'w');
-			await fd.write(`#${this.version}\n` + changelog + '\n' + history);
+			await fd.write(`# ${this.version}\n` + changelog + '\n' + history);
 			await fd.close();
 
 			await this.shouldCommitFiles({amend: true});
