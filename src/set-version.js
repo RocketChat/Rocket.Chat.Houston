@@ -1,12 +1,14 @@
 const path = require('path');
 const fs = require('fs');
-const { promisify } = require('util');
+const { open, readFile, writeFile } = require('fs/promises');
 const semver = require('semver');
 const inquirer = require('inquirer');
 const git = require('simple-git/promise')(process.cwd());
 const logs = require('./logs');
+const conventionalLogs = require('./conventional-logs');
 const { Octokit } = require('@octokit/rest');
 const md = require('../src/md');
+const conventionalMarkdown = require('../src/conventional-md');
 const { getMetadata } = require('./utils');
 
 const octokit = new Octokit({
@@ -14,9 +16,6 @@ const octokit = new Octokit({
 });
 
 const files = [];
-
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
 
 const {
 	PUSH_TAG_OPTIONS = '',
@@ -45,14 +44,20 @@ class Houston {
 		this.version = file.version;
 	}
 
-	async init() {
-		if (!await this.isClean()) {
-			throw new Error('Branch not synced or changes in files. Please run this only on clean stage.');
-		}
+	async init(flow) {
+		// if (!await this.isClean()) {
+		// 	throw new Error('Branch not synced or changes in files. Please run this only on clean stage.');
+		// }
 
 		await this.fetch();
 		await this.getRemote();
-		await this.selectAction();
+
+		if (flow === 'bump') {
+			await this.bumpRelease();
+			return;
+		}
+
+		await this.selectAction(flow);
 	}
 
 	async isClean() {
@@ -215,7 +220,82 @@ class Houston {
 		await this.updateHistory();
 		await this.shouldPushCurrentBranch();
 		await this.shouldCreateDraftReleaseWithHistory();
-		await this.shouldCreateReleasePullRequest();
+	}
+
+	async bumpRelease() {
+		const { answer } = await inquirer.prompt([{
+			type: 'list',
+			message: 'Which action you want to execute?',
+			name: 'answer',
+			default: 'release',
+			choices: [{
+				name: 'Final Release', value: 'final'
+			// }, {
+			// 	name: 'Major Release', value: 'major'
+			}, {
+				name: 'Patch Release (patch)', value: 'patch'
+			}, {
+				name: 'Release Candidate (rc)', value: 'rc'
+			}, {
+				name: 'Beta Release (beta)', value: 'beta'
+			}]
+		}]);
+
+		const version = {
+			currentVersion: this.version,
+			release: 'patch'
+		};
+
+		if (answer === 'final') {
+			version.release = 'minor';
+		// } else if (answer === 'major') {
+		// 	version.release = 'premajor';
+		} else if (answer === 'beta') {
+			version.release = 'prerelease';
+			version.identifier = 'beta';
+		} else if (answer === 'rc') {
+			version.release = 'prerelease';
+			version.identifier = 'rc';
+		// } else if (type === 'release-from-cherry-picks') {
+		// 	version.release = 'patch';
+		}
+
+		this.readVersionFromPackageJson();
+		await this.selectVersionToUpdate(version);
+		await this.updateVersionInFiles();
+		const changelog = await this.createChangelog(this.previousVersion);
+
+		// write changelog to history only when cutting the final release
+		if (['final', 'patch'].includes(answer)) {
+			const history = await readFile(path.join(process.cwd(), 'HISTORY.md'), 'utf8');
+
+			const fd = await open(path.join(process.cwd(), 'HISTORY.md'), 'w');
+			await fd.write(`# ${this.version}\n` + changelog + '\n' + history);
+			await fd.close();
+
+			await this.shouldCommitFiles({amend: true});
+		}
+
+		await this.shouldPushCurrentBranch();
+
+		const releaseOptions = {
+			changelog
+		};
+
+		if (answer === 'rc') {
+			await this.shouldAddTag();
+			releaseOptions.prerelease = true;
+		} else {
+			releaseOptions.draft = true;
+
+			if (answer === 'final') {
+				// TODO PR should already have been created, now we need to remove it from draft and update the description with the whole changelog
+			} else {
+				await this.shouldCreateReleasePullRequest({ base: `release-${this.previousVersion}`, changelog });
+			}
+		}
+
+		await this.shouldCreateRelease(releaseOptions);
 	}
 
 	async newFinalReleaseFromCherryPicks() {
@@ -236,7 +316,7 @@ class Houston {
 		await this.goToBranch({branch: 'develop', pull: true});
 		await this.createAndGoToBranch({branch: 'develop-sync'});
 		await this.shouldMergeFromTo({from: 'origin/master', to: 'develop-sync'});
-		await this.selectVersionToUpdate({currentVersion: this.version, release: 'minor', suffix: '-develop'});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'preminor', identifier: 'develop', identifierBase: false});
 		await this.updateVersionInFiles();
 		await this.shouldPushCurrentBranch();
 		await this.shouldCreateDevelopSyncPullRequest();
@@ -413,8 +493,8 @@ class Houston {
 		}
 	}
 
-	async selectVersionToUpdate({currentVersion, release, identifier, suffix = ''}) {
-		const nextVersion = semver.inc(currentVersion, release, identifier) + suffix;
+	async selectVersionToUpdate({currentVersion, release, identifier, identifierBase = true}) {
+		const nextVersion = semver.inc(currentVersion, release, identifier, identifierBase);
 		let answers = await inquirer.prompt([{
 			type: 'list',
 			message: `The current version is ${ this.version }. Update to version:`,
@@ -433,6 +513,8 @@ class Houston {
 		}
 
 		const { version } = answers;
+		// TODO it should not be master here, but the previous version (either the version from master or a previous release-candidate)
+		this.previousVersion = release === 'minor' || this.version.includes('-develop') ? 'master' : this.version;
 		this.oldVersion = this.version;
 		this.version = version;
 		return version;
@@ -460,6 +542,27 @@ class Houston {
 		await logs({headName: this.version, getMetadata: getMetadata(), owner: this.owner, repo: this.repo, minTag: this.minTag });
 		await md({ owner: this.owner, repo: this.repo });
 		await this.shouldCommitFiles({amend: true});
+	}
+
+	async createChangelog(oldVersion) {
+		const { prs, metadata } = await conventionalLogs({
+			oldVersion: oldVersion || this.oldVersion,
+			version: this.version,
+			owner: this.owner,
+			repo: this.repo,
+			getMetadata: getMetadata()
+		});
+		const changelog = await conventionalMarkdown({
+			tag: this.version,
+			release: {
+				...metadata,
+				pull_requests: prs
+			},
+			owner: this.owner,
+			repo: this.repo
+		});
+
+		return changelog;
 	}
 
 	async shouldCommitFiles({amend = false} = {}) {
@@ -535,14 +638,16 @@ class Houston {
 		}
 	}
 
-	async shouldCreateDraftReleaseWithHistory({branch = 'master'} = {}) {
+	/**
+	 * @deprecated Use shouldCreateRelease instead
+	 */
+	async shouldCreateDraftReleaseWithHistory({ changelog: body, branch = 'master' } = {}) {
 		const answers = await inquirer.prompt([{
 			type: 'confirm',
 			message: `Create a GitHub draft release "${ this.version }"?`,
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 		if (answers.create) {
 			console.log('Creating draft release');
 			await octokit.repos.createRelease({
@@ -558,28 +663,78 @@ class Houston {
 		}
 	}
 
-	async shouldCreateReleasePullRequest() {
+	async shouldCreateRelease({ changelog: body, branch = 'master', draft, prerelease } = {}) {
+		const answers = await inquirer.prompt([{
+			type: 'confirm',
+			message: `Create a GitHub${draft ? ' draft' : ''} release "${ this.version }"?`,
+			name: 'create'
+		}]);
+
+		if (answers.create) {
+			console.log('Creating release');
+			await octokit.repos.createRelease({
+				owner: this.owner,
+				repo: this.repo,
+				tag_name: this.version,
+				target_commitish: branch,
+				name: this.version,
+				body,
+				...(draft && { draft: true }),
+				...(prerelease && { prerelease: true }),
+			});
+		}
+	}
+
+	async shouldCreateReleasePullRequest({ base = 'master', changelog } = {}) {
 		const answers = await inquirer.prompt([{
 			type: 'confirm',
 			message: `Create a GitHub Pull Request for release "${ this.version }"?`,
 			name: 'create'
 		}]);
 
-		const body = await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
-		if (answers.create) {
-			console.log('Creating pull request');
-			const pr = await octokit.pulls.create({
-				owner: this.owner,
-				repo: this.repo,
-				title: `Release ${ this.version }`,
-				head: await this.currentBranch(),
-				base: 'master',
-				body: body.slice(0, 65536)
-			});
-			if (pr.data) {
-				console.log(`Pull Request created: ${ pr.data.title }`);
-				console.log(pr.data.html_url);
+		if (!answers.create) {
+			return;
+		}
+
+		const baseBranch = await (async () => {
+			const options = await inquirer.prompt([{
+				type: 'list',
+				message: 'What should be the target branch for the PR?',
+				name: 'branch',
+				choices: [
+					base,
+					'master',
+					'develop',
+					{ name: 'Something different', value: 'custom' }
+				]
+			}]);
+
+			if (options.branch !== 'custom') {
+				return options.branch;
 			}
+
+			const custom = await inquirer.prompt([{
+				name: 'branch',
+				message: 'Enter the branch name:'
+			}]);
+
+			return custom.branch;
+		})();
+
+		const body = changelog || await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
+
+		console.log('Creating pull request. Target:', baseBranch);
+		const pr = await octokit.pulls.create({
+			owner: this.owner,
+			repo: this.repo,
+			title: `Release ${ this.version }`,
+			head: await this.currentBranch(),
+			base: baseBranch,
+			body: body.slice(0, 65536)
+		});
+		if (pr.data) {
+			console.log(`Pull Request created: ${ pr.data.title }`);
+			console.log(pr.data.html_url);
 		}
 	}
 
@@ -607,8 +762,8 @@ class Houston {
 	}
 }
 
-module.exports = function({ owner, repo }) {
+module.exports = function({ flow, owner, repo }) {
 	const houston = new Houston({ owner, repo });
-	houston.init().catch(error => console.error(error));
+	houston.init(flow).catch(error => console.error(error));
 };
 

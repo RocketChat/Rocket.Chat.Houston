@@ -55,11 +55,21 @@ program
 		releaseTable({ ...await getRepoInfo() });
 	});
 
-program
+	program
 	.command('release')
 	.description('Release a new version')
 	.action(async function() {
 		setVersion(await getRepoInfo());
+	});
+
+program
+	.command('bump')
+	.description('Bump the version')
+	.action(async function() {
+		setVersion({
+			...await getRepoInfo(),
+			flow: 'bump'
+		});
 	});
 
 program.parse(process.argv);

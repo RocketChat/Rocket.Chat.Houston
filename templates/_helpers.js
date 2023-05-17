@@ -20,6 +20,17 @@ const GroupNames = {
 	NOGROUP: '🔍 Minor changes'
 };
 
+const ConventionalGroupMap = {
+	fix: 'FIX',
+	feat: 'NEW',
+	perf: 'IMPROVE',
+	refactor: 'NOGROUP',
+	docs: 'NOGROUP',
+	style: 'NOGROUP',
+	test: 'NOGROUP',
+	chore: 'NOGROUP'
+};
+
 function removeDuplicates(prs) {
 	return prs.filter((pr1, index1) => pr1.manual || !prs.some((pr2, index2) => pr1.pr === pr2.pr && index1 !== index2));
 }
@@ -51,7 +62,15 @@ module.exports = {
 				pr.title = pr.title.replace(/^\[\s*(.+?)\s*\]/, '**$1:**');
 				groups[match[1]].push(pr);
 			} else {
-				groups.NOGROUP.push(pr);
+				// fallback to conventional commits
+				const match = pr.title.match(/^(fix|feat|perf|refactor|docs|style|test|chore)(\(.+\))?:\s*(.+)/);
+				if (match) {
+					pr.title = match[3];
+					pr.title = pr.title.replace(/^\[\s*(.+?)\s*\]/, '**$1:**');
+					groups[ConventionalGroupMap[match[1]]].push(pr);
+				} else {
+					groups.NOGROUP.push(pr);
+				}
 			}
 		});
 
