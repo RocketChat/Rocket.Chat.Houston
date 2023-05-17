@@ -291,7 +291,7 @@ class Houston {
 			if (answer === 'final') {
 				// TODO PR should already have been created, now we need to remove it from draft and update the description with the whole changelog
 			} else {
-				await this.shouldCreateReleasePullRequest({ changelog });
+				await this.shouldCreateReleasePullRequest({ base: `release-${this.previousVersion}`, changelog });
 			}
 		}
 
@@ -685,29 +685,56 @@ class Houston {
 		}
 	}
 
-	async shouldCreateReleasePullRequest({ changelog } = {}) {
+	async shouldCreateReleasePullRequest({ base = 'master', changelog } = {}) {
 		const answers = await inquirer.prompt([{
 			type: 'confirm',
 			message: `Create a GitHub Pull Request for release "${ this.version }"?`,
 			name: 'create'
 		}]);
 
+		if (!answers.create) {
+			return;
+		}
+
+		const baseBranch = await (async () => {
+			const options = await inquirer.prompt([{
+				type: 'list',
+				message: 'What should be the target branch for the PR?',
+				name: 'branch',
+				choices: [
+					base,
+					'master',
+					'develop',
+					{ name: 'Something different', value: 'custom' }
+				]
+			}]);
+
+			if (options.branch !== 'custom') {
+				return options.branch;
+			}
+
+			const custom = await inquirer.prompt([{
+				name: 'branch',
+				message: 'Enter the branch name:'
+			}]);
+
+			return custom.branch;
+		})();
+
 		const body = changelog || await md({tag: this.version, write: false, title: false, owner: this.owner, repo: this.repo});
 
-		if (answers.create) {
-			console.log('Creating pull request');
-			const pr = await octokit.pulls.create({
-				owner: this.owner,
-				repo: this.repo,
-				title: `Release ${ this.version }`,
-				head: await this.currentBranch(),
-				base: 'master',
-				body: body.slice(0, 65536)
-			});
-			if (pr.data) {
-				console.log(`Pull Request created: ${ pr.data.title }`);
-				console.log(pr.data.html_url);
-			}
+		console.log('Creating pull request. Target:', baseBranch);
+		const pr = await octokit.pulls.create({
+			owner: this.owner,
+			repo: this.repo,
+			title: `Release ${ this.version }`,
+			head: await this.currentBranch(),
+			base: baseBranch,
+			body: body.slice(0, 65536)
+		});
+		if (pr.data) {
+			console.log(`Pull Request created: ${ pr.data.title }`);
+			console.log(pr.data.html_url);
 		}
 	}
 
