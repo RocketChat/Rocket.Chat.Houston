@@ -247,7 +247,7 @@ class Houston {
 		};
 
 		if (answer === 'final') {
-			version.release = 'prerelease';
+			version.release = 'minor';
 		// } else if (answer === 'major') {
 		// 	version.release = 'premajor';
 		} else if (answer === 'beta') {
@@ -286,8 +286,13 @@ class Houston {
 			await this.shouldAddTag();
 			releaseOptions.prerelease = true;
 		} else {
-			await this.shouldCreateReleasePullRequest({ changelog });
 			releaseOptions.draft = true;
+
+			if (answer === 'final') {
+				// TODO PR should already have been created, now we need to remove it from draft and update the description with the whole changelog
+			} else {
+				await this.shouldCreateReleasePullRequest({ changelog });
+			}
 		}
 
 		await this.shouldCreateRelease(releaseOptions);
@@ -311,7 +316,7 @@ class Houston {
 		await this.goToBranch({branch: 'develop', pull: true});
 		await this.createAndGoToBranch({branch: 'develop-sync'});
 		await this.shouldMergeFromTo({from: 'origin/master', to: 'develop-sync'});
-		await this.selectVersionToUpdate({currentVersion: this.version, release: 'minor', suffix: '-develop'});
+		await this.selectVersionToUpdate({currentVersion: this.version, release: 'preminor', identifier: 'develop', identifierBase: false});
 		await this.updateVersionInFiles();
 		await this.shouldPushCurrentBranch();
 		await this.shouldCreateDevelopSyncPullRequest();
@@ -488,8 +493,8 @@ class Houston {
 		}
 	}
 
-	async selectVersionToUpdate({currentVersion, release, identifier, suffix = ''}) {
-		const nextVersion = semver.inc(currentVersion, release, identifier) + suffix;
+	async selectVersionToUpdate({currentVersion, release, identifier, identifierBase = true}) {
+		const nextVersion = semver.inc(currentVersion, release, identifier, identifierBase);
 		let answers = await inquirer.prompt([{
 			type: 'list',
 			message: `The current version is ${ this.version }. Update to version:`,
@@ -509,7 +514,7 @@ class Houston {
 
 		const { version } = answers;
 		// TODO it should not be master here, but the previous version (either the version from master or a previous release-candidate)
-		this.previousVersion = this.version.includes('-develop') ? 'master' : this.version;
+		this.previousVersion = release === 'minor' || this.version.includes('-develop') ? 'master' : this.version;
 		this.oldVersion = this.version;
 		this.version = version;
 		return version;
