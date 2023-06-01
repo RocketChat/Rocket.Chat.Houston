@@ -2,6 +2,7 @@ import { simpleGit } from 'simple-git';
 import fs from 'fs/promises';
 import path from 'path';
 import semver from 'semver';
+import { outputCI } from '../outputCI';
 
 const git = simpleGit();
 
@@ -22,4 +23,6 @@ export async function createBranch({ base, type }: { base: string; type: 'patch'
 	}
 
 	await git.checkoutLocalBranch(newBranch);
+
+	outputCI('newBranch', newBranch);
 }
