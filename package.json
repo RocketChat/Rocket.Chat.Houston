@@ -1,8 +1,8 @@
 {
   "name": "@rocket.chat/houston",
-  "version": "0.27.0-next.0",
+  "version": "0.27.0-next.2",
   "description": "Rocket.Chat Command Line Tools",
-  "main": "dist/cli.js",
+  "main": "dist/bin.js",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/RocketChat/Rocket.Chat.Houston.git"
@@ -16,7 +16,7 @@
   "private": false,
   "license": "MIT",
   "bin": {
-    "houston": "./dist/cli.js"
+    "houston": "./dist/bin.js"
   },
   "dependencies": {
     "@actions/core": "^1.10.0",
