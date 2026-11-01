@@ -215,8 +215,14 @@ and a create that cannot finish leaves a half-made workspace behind.
 with `--bind`, `HOUSTON_BIND_HOST` or `config set bind_host`. A workspace reachable beyond
 loopback gets a generated admin password instead, when it is made: a rebuild keeps the one
 its database holds (`keptAdminPassword`), since Rocket.Chat sets it only on an empty
-database. `PRESET_PORTS` in `lib/config.ts` is the one port registry, and
-`core/lifecycle/ports.ts` allocates Rocket.Chat's own port under a lock.
+database. `PRESET_PORTS` in `lib/config.ts` is the one registry of PREFERRED side ports,
+`MONITOR_PORTS` monitoring's. `core/lifecycle/ports.ts` allocates Rocket.Chat's own port
+and every side and monitoring port under one lock (`claimSidePorts`): preferred first, the
+next free one when another workspace holds it, never another preset's preferred port or a
+voice port. A workspace records only what moved (`extra.side_ports`; monitoring in
+`extra.monitoring_ports`), `runner/record.ts` reads it back (`sidePortsOf`,
+`grafanaPortOf`, `prometheusPortOf`), and the builders take the result as their `ports`
+argument. Only voice's call ports, which phones dial by number, are refused when taken.
 
 ## Runtimes and the cloud
 

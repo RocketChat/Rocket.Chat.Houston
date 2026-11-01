@@ -16,7 +16,7 @@
  * available: Rocket.Chat serves its own widget there on the same host.
  */
 import { withoutLocalSetup } from './guides';
-import { k8sManifests, presetPort, safeDump, safeLoadAll } from './common';
+import { k8sManifests, safeDump, safeLoadAll } from './common';
 import { type Preset } from './types';
 
 type Bag = Record<string, unknown>;
@@ -41,7 +41,7 @@ export const LDAPADMIN_PATH = '/phpldapadmin';
 const NGINX_ROOT = '/usr/share/nginx/html';
 const NGINX_IMAGE = 'docker.io/nginx:alpine';
 const MINIO_UI = 'minio-ui';
-const CONSOLE_PORT = presetPort('s3_minio', 1);
+const UI_PORT_LABEL = 'houston.io/ui-port';
 
 /**
  * Presigned downloads are links to MinIO's own http:// port, and an https page may not load
@@ -65,13 +65,14 @@ export const PRESIGNED_OVER_HTTPS =
  * (re-`up` downs everything first, `start` starts minio first). A Kubernetes Service keeps
  * its address while it exists, and `down` keeps the presets' Services for that reason.
  */
-const MINIO_UI_CONF = `server {
+function minioUiConf(consolePort: number): string {
+  return `server {
   listen 80;
   absolute_redirect off;
   location = / { return 302 ${MINIO_PATH}/; }
   location = ${MINIO_PATH} { return 301 ${MINIO_PATH}/; }
   location ${MINIO_PATH}/ {
-    proxy_pass http://minio:${String(presetPort('s3_minio', 1))}/;
+    proxy_pass http://minio:${String(consolePort)}/;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -84,6 +85,7 @@ const MINIO_UI_CONF = `server {
   }
 }
 `;
+}
 
 /**
  * Short on purpose: the edge reaches it as `houston-<name>-ldap-ui-1`, a DNS label, and
@@ -159,6 +161,28 @@ function ports(pre: Preset, service: string, docs: Bag[][], fallback: number): [
   const container = Number(inside) || Number(first?.targetPort) || fallback;
   const exposed = Number(first?.port) || Number(published) || fallback;
   return [container, exposed];
+}
+
+/**
+ * The HOST port a side UI is published on in this workspace: its `houston.io/ui-port` label on
+ * Kubernetes (read before this module moves the label), the host side of its mapping on
+ * Compose. Read off the preset, never the registry, so it is whatever port the builder was
+ * given. 0 when the preset publishes none there.
+ */
+function hostPortOf(
+  pre: Preset,
+  docs: Bag[][],
+  kube: boolean,
+  service: string,
+  { k8sService = service, index = 0 }: { k8sService?: string; index?: number } = {},
+): number {
+  if (kube) {
+    const svc = find(docs, 'Service', k8sService);
+    return Number(bag(bag(svc?.metadata).labels)[UI_PORT_LABEL]) || 0;
+  }
+  const mappings = bag(pre.services[service]).ports;
+  const mapping = Array.isArray(mappings) ? String(mappings[index] ?? '') : '';
+  return Number(mapping.split(':').slice(-2)[0]) || 0;
 }
 
 function addRedirects(realm: string, publicUrl: string): string {
@@ -237,9 +261,10 @@ export function withPublicUrl(pre: Preset, publicUrl: string, runtime: string): 
     const local = typeof out.extra.mailpit_url === 'string' ? out.extra.mailpit_url : '';
     if (local) out.extra.mailpit_url = `${local.replace(/\/+$/u, '')}${MAILPIT_PATH}`;
     // Its own port answers only under the path now: say the address that works anywhere.
+    // The HOST port, which the notes name: on Kubernetes `exposed` is the Service's.
     out.notes = rewrite(
       out.notes,
-      `http://localhost:${String(exposed)}`,
+      `http://localhost:${String(hostPortOf(pre, docs, kube, 'mailpit'))}`,
       `${base}${MAILPIT_PATH}/`,
     );
   }
@@ -298,6 +323,7 @@ export function withPublicUrl(pre: Preset, publicUrl: string, runtime: string): 
 
   if (has('keycloak')) {
     const [container, exposed] = ports(pre, 'keycloak', docs, 8080);
+    const published = hostPortOf(pre, docs, kube, 'keycloak');
     paths.push({
       preset: 'keycloak',
       path: KEYCLOAK_PATH,
@@ -361,7 +387,7 @@ export function withPublicUrl(pre: Preset, publicUrl: string, runtime: string): 
     // The hosts entry and `idp_host` were for a browser reaching Keycloak by port.
     out.notes = dropRuns(out.notes, KEYCLOAK_HOST_NOTES);
     // And the card's: a line sending the browser to Keycloak's port becomes the path.
-    const byPort = new RegExp(`http://[A-Za-z0-9.-]+:${String(exposed)}`, 'u');
+    const byPort = new RegExp(`http://[A-Za-z0-9.-]+:${String(published)}`, 'u');
     out.guides = out.guides.map((one) =>
       one.signIn.some(([, , where]) => where.startsWith('Keycloak'))
         ? {
@@ -376,13 +402,19 @@ export function withPublicUrl(pre: Preset, publicUrl: string, runtime: string): 
     // Every address the notes give for Keycloak (its port, under any idp_host) is the path now.
     out.notes = out.notes.map((note) =>
       note.replace(
-        new RegExp(`http://[A-Za-z0-9.-]+:${String(exposed)}`, 'gu'),
+        new RegExp(`http://[A-Za-z0-9.-]+:${String(published)}`, 'gu'),
         `${base}${KEYCLOAK_PATH}`,
       ),
     );
   }
 
   if (has('minio')) {
+    // The console listens on its host port (`s3-minio.ts`: same inside and out), so the one
+    // number is both what the nginx proxies to and what it takes over on the host.
+    const consolePort = hostPortOf(pre, docs, kube, 'minio', {
+      k8sService: 'minio-console',
+      index: 1,
+    });
     paths.push({
       preset: 's3_minio',
       path: MINIO_PATH,
@@ -397,15 +429,15 @@ export function withPublicUrl(pre: Preset, publicUrl: string, runtime: string): 
       // own Service would serve a page whose base it no longer answers.
       const consoleService = find(docs, 'Service', 'minio-console');
       if (consoleService !== undefined)
-        delete bag(bag(consoleService.metadata).labels)['houston.io/ui-port'];
+        delete bag(bag(consoleService.metadata).labels)[UI_PORT_LABEL];
       docs.push(
         safeLoadAll(
           k8sManifests({
             name: MINIO_UI,
             image: NGINX_IMAGE,
-            ports: [[CONSOLE_PORT, 80]],
-            ui: { [MINIO_UI]: [CONSOLE_PORT, 80] },
-            files: { 'default.conf': MINIO_UI_CONF },
+            ports: [[consolePort, 80]],
+            ui: { [MINIO_UI]: [consolePort, 80] },
+            files: { 'default.conf': minioUiConf(consolePort) },
             mounts: [
               {
                 name: 'files',
@@ -420,23 +452,23 @@ export function withPublicUrl(pre: Preset, publicUrl: string, runtime: string): 
       const svc = bag(out.services.minio);
       svc.environment = { ...bag(svc.environment), ...redirect };
       // The console's port is the nginx's now, which sends / to /minio/, so
-      // http://localhost:9001 keeps opening the console.
-      const published = `${String(CONSOLE_PORT)}:${String(CONSOLE_PORT)}`;
+      // http://localhost:<console port> keeps opening the console.
+      const published = `${String(consolePort)}:${String(consolePort)}`;
       if (Array.isArray(svc.ports))
         svc.ports = (svc.ports as string[]).filter((p) => p !== published);
       out.services[MINIO_UI] = {
         image: NGINX_IMAGE,
         volumes: [`./s3_minio/${MINIO_UI}.conf:/etc/nginx/conf.d/default.conf:ro`],
-        ports: [`${String(CONSOLE_PORT)}:80`],
+        ports: [`${String(consolePort)}:80`],
         depends_on: ['minio'],
         restart: 'unless-stopped',
       };
-      out.files = [...out.files, [`s3_minio/${MINIO_UI}.conf`, MINIO_UI_CONF]];
+      out.files = [...out.files, [`s3_minio/${MINIO_UI}.conf`, minioUiConf(consolePort)]];
     }
     // The address that works from anywhere, not only on this machine.
     out.notes = rewrite(
       out.notes,
-      `http://localhost:${String(CONSOLE_PORT)}`,
+      `http://localhost:${String(consolePort)}`,
       `${base}${MINIO_PATH}/`,
     );
     if (presignedOf(out)) out.notes.push(`Note: ${PRESIGNED_OVER_HTTPS}`);
@@ -453,11 +485,11 @@ export function withPublicUrl(pre: Preset, publicUrl: string, runtime: string): 
       container_port: 80,
       service_port: 80,
     });
-    const port = presetPort('ldap');
+    const port = hostPortOf(pre, docs, kube, 'phpldapadmin');
     if (kube) {
       // The host port forwards to the nginx now, which sends / to /phpldapadmin/.
       const uiService = find(docs, 'Service', 'phpldapadmin');
-      if (uiService !== undefined) delete bag(bag(uiService.metadata).labels)['houston.io/ui-port'];
+      if (uiService !== undefined) delete bag(bag(uiService.metadata).labels)[UI_PORT_LABEL];
       docs.push(
         safeLoadAll(
           k8sManifests({
@@ -489,11 +521,7 @@ export function withPublicUrl(pre: Preset, publicUrl: string, runtime: string): 
       };
       out.files = [...out.files, [`ldap/${LDAPADMIN_UI}.conf`, conf]];
     }
-    out.notes = rewrite(
-      out.notes,
-      `http://localhost:${String(presetPort('ldap'))}`,
-      `${base}${LDAPADMIN_PATH}/`,
-    );
+    out.notes = rewrite(out.notes, `http://localhost:${String(port)}`, `${base}${LDAPADMIN_PATH}/`);
   }
 
   if (paths.length === 0) return pre;

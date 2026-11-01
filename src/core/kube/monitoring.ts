@@ -449,6 +449,9 @@ export async function ensureMonitoring({
   const publicHost = publicUrl ? new URL(publicUrl).host : '';
   // The first public host becomes canonical; later hosts share relative paths without
   // flipping this shared setting and restarting everybody's Grafana.
+  // shortcut: one Grafana per cluster, so its root URL names the preferred loopback forward
+  // (5050); a second monitored workspace's forward on 5051 renders its dashboards, but links
+  // Grafana builds itself (sign-in redirects, share links) name 5050. Upgrade if that bites.
   const host =
     existingHost && !(existingHost === 'localhost:5050' && publicHost)
       ? existingHost

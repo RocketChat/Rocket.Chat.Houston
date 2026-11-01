@@ -27,7 +27,7 @@ import { podRows } from '../kube/status';
 import { OPERATOR_MIN_MONGO, OPERATOR_NAMESPACE } from '../kube/operator';
 import { ownedKubeconfig } from '../kube/exec';
 import * as paths from '../runner/paths';
-import { type Metadata } from '../runner/record';
+import { type Metadata, grafanaPortOf, prometheusPortOf, sidePortsOf } from '../runner/record';
 import { MODE_ACME } from '../tls';
 import * as topology from '../topology';
 
@@ -212,19 +212,22 @@ export function scenarioGroup(meta: Metadata): NoteGroup[] {
     // manifests on Kubernetes and a compose service on Docker, and its notes follow the
     // shape it was built in. A composed workspace merges its presets as the create did,
     // into ONE group, so a reader that renders the first scenario group shows them all.
+    // On the workspace's OWN ports, which the create gave it: the registry's are another's.
     const runtime = topology.ofMeta(meta);
+    const ports = sidePortsOf(meta);
     if (names.length > 1) {
       pre = presets.loadMany(
         names,
         bag(extra.preset_params) as Record<string, Record<string, unknown>>,
         runtime,
         new Set(Object.keys(bag(extra.env))),
+        ports,
       );
     } else {
       pre =
         runtime === topology.KUBERNETES
-          ? presets.resolve(name, topology.KUBERNETES, params)
-          : presets.load(name, params);
+          ? presets.resolve(name, topology.KUBERNETES, params, ports)
+          : presets.load(name, params, ports);
     }
     // Over HTTPS the create served the preset's own UIs at paths of the name, and moved
     // their notes there (`lib/presets/public.ts`); derive them the way it did.
@@ -616,7 +619,10 @@ export async function kubernetesNoteGroups(meta: Metadata): Promise<NoteGroup[]>
     noteGroup('Monitoring', {
       rows: isTruthy(extra.monitoring)
         ? [
-            ['Grafana', grafanaUrl(isTruthy(extra.tls) ? meta.publicUrl : '', true)],
+            [
+              'Grafana',
+              grafanaUrl(isTruthy(extra.tls) ? meta.publicUrl : '', true, grafanaPortOf(meta)),
+            ],
             ['Login', 'admin/admin; anonymous Viewer'],
           ]
         : [],
@@ -664,7 +670,12 @@ export function composeNoteGroups(meta: Metadata): NoteGroup[] {
   if (isTruthy(extra.monitoring)) {
     const publicUrl = isTruthy(extra.tls) ? meta.publicUrl : '';
     groups.push(
-      noteGroup('Monitoring', { body: monitoringNotes(grafanaUrl(publicUrl, !!publicUrl)) }),
+      noteGroup('Monitoring', {
+        body: monitoringNotes(
+          grafanaUrl(publicUrl, !!publicUrl, grafanaPortOf(meta)),
+          prometheusPortOf(meta),
+        ),
+      }),
     );
   }
   return groups;

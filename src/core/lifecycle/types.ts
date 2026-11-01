@@ -177,9 +177,9 @@ export const LOOPBACK_BINDS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * Preset sidecar links to surface on the dashboard:
- * preset -> [label, index into config.PRESET_PORTS[preset]]. Ports come from config so
- * they never drift.
+ * Preset sidecar links to surface on the dashboard: preset -> [label, index into its ports].
+ * The ports are the workspace's own (`record.sidePortsOf` over the registry), so a link never
+ * drifts from what the workspace publishes.
  */
 export const PRESET_LINKS: Readonly<Record<string, readonly (readonly [string, number])[]>> =
   Object.freeze({

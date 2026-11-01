@@ -92,6 +92,20 @@ it('Grafana public URL regression: permits the monitored HTTPS origin in the GUI
   );
 });
 
+it("lets the GUI frame a second monitored workspace's Grafana, on the port it was given", async () => {
+  // The k6 dashboard is an iframe: a page allowing only localhost:5050 refused it.
+  const app = await appWith({ accounts: false });
+  await writeRecord('first', metadata({ name: 'first', extra: { monitoring: true } }));
+  await writeRecord(
+    'second',
+    metadata({ name: 'second', extra: { monitoring: true, monitoring_ports: [9091, 5051] } }),
+  );
+  const response = await app.inject({ url: '/', headers: { host: 'localhost' } });
+  expect(String(response.headers['content-security-policy'])).toContain(
+    "frame-src 'self' http://localhost:5050 http://localhost:5051;",
+  );
+});
+
 it('Grafana public URL regression: refreshes the iframe policy when cached HTML is revalidated', async () => {
   const app = await appWith({ accounts: false });
   const before = await app.inject({ url: '/', headers: { host: 'localhost' } });

@@ -187,6 +187,29 @@ describe('which notes a record produces', () => {
     expect(await noteGroupsOf(meta)).toEqual([]);
   });
 
+  it("names a second workspace's own Mailpit and monitoring ports, never the preferred ones", async () => {
+    // The notes are built again on every read: built on the registry, a second email
+    // workspace's said localhost:8025 -- the first workspace's inbox.
+    const groups = await noteGroupsOf(
+      record({
+        name: 'second',
+        project: 'houston-second',
+        preset: 'email',
+        extra: {
+          runtime: 'docker',
+          side_ports: { email: [8026] },
+          monitoring: true,
+          monitoring_ports: [9091, 5051],
+        },
+      }),
+    );
+    const text = flattenNotes(groups).join('\n');
+    expect(text).toContain('http://localhost:8026');
+    expect(text).toContain('http://localhost:5051');
+    expect(text).toContain('http://localhost:9091');
+    expect(text).not.toMatch(/localhost:(8025|5050|9090)\b/u);
+  });
+
   it("says which host a shared workspace's preset pages are on, and only when they need it", async () => {
     // phpLDAPadmin, MinIO's console, Mailpit's inbox and the livechat page all print
     // `localhost`, written when the browser was assumed to be on the docker host. On a

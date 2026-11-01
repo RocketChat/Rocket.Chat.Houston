@@ -5,7 +5,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const EXPECTED = '30ff68009956394f624361440ef10934894ffb44c956ac0ca6fee1d1ad907cff';
+const EXPECTED = '53d4fe98f9d12eb94430a66c3e183861b558c7eaaaa5e4e8f26ae09a572a9d02';
+// Re-recorded for side ports allocated per workspace: the Presets page says each preset's
+// ports are preferred (another workspace with it gets the next free one); restore as new no
+// longer names a holder of its ports, since the copy gets its own, and its Restore button
+// carries the server's refusal instead; and a monitoring attach whose Grafana is on a port
+// other than 5050 reloads the page so its frame is allowed -- only for a Grafana the page was
+// not loaded allowing, which it records from its first workspace list.
 // Re-recorded for the 2026-10-21 live audit: a create shown as Creating on the page that
 // started it, and kept out of Home's "Needs you" (it read `down`); the Logs tab's message
 // under its columns at phone width, where it had ~50px; and an EKS build with the Nodes

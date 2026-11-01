@@ -62,7 +62,7 @@ const OTELCOL_IMAGE = 'docker.io/otel/opentelemetry-collector-contrib:0.143.0';
 
 type Service = Record<string, unknown>;
 
-function prometheus(): Service {
+function prometheus(port: number): Service {
   return {
     image: PROMETHEUS_IMAGE,
     command: [
@@ -78,18 +78,21 @@ function prometheus(): Service {
       './monitoring/file_sd_configs:/etc/prometheus/file_sd_configs:ro',
       'prometheus_tsdb:/prometheus',
     ],
-    ports: [`${PROM_PORT}:9090`],
+    ports: [`${String(port)}:9090`],
     restart: 'unless-stopped',
   };
 }
 
-/** The browser URL; a Kubernetes forward also reaches Grafana under /grafana. */
-export function grafanaUrl(publicUrl = '', subPath = false): string {
-  const local = `http://localhost:${GRAFANA_PORT}`;
+/**
+ * The browser URL; a Kubernetes forward also reaches Grafana under /grafana. `port` is the
+ * workspace's Grafana host port (`extra.monitoring_ports`); the default is the preferred one.
+ */
+export function grafanaUrl(publicUrl = '', subPath = false, port: number = GRAFANA_PORT): string {
+  const local = `http://localhost:${String(port)}`;
   return subPath ? `${(publicUrl || local).replace(/\/+$/u, '')}/grafana` : local;
 }
 
-function grafana(publicUrl = ''): Service {
+function grafana(publicUrl: string, port: number): Service {
   return {
     image: GRAFANA_IMAGE,
     environment: {
@@ -112,7 +115,7 @@ function grafana(publicUrl = ''): Service {
       './monitoring/grafana/dashboards:/dashboards:ro',
       'grafana_data:/var/lib/grafana',
     ],
-    ports: [`${GRAFANA_PORT}:3000`],
+    ports: [`${String(port)}:3000`],
     depends_on: ['prometheus'],
     restart: 'unless-stopped',
   };
@@ -190,10 +193,13 @@ function opentelemetryLogsCollector(): Service {
  * them to the host interface (`compose.bindPorts` for `up --monitor`, or the attach
  * path directly) so they are never double-bound.
  */
-export function services(publicUrl = ''): Record<string, Service> {
+export function services(
+  publicUrl = '',
+  [prometheusPort, grafanaPort]: readonly number[] = MONITOR_PORTS,
+): Record<string, Service> {
   return {
-    prometheus: prometheus(),
-    grafana: grafana(publicUrl),
+    prometheus: prometheus(prometheusPort ?? PROM_PORT),
+    grafana: grafana(publicUrl, grafanaPort ?? GRAFANA_PORT),
     'node-exporter': nodeExporter(),
     'mongodb-exporter': mongodbExporter(),
     loki: loki(),
@@ -453,11 +459,11 @@ export function files(rcServices: readonly string[], project = ''): [string, str
   ];
 }
 
-/** What `up --monitor` prints once the stack is attached. */
-export function notes(url = grafanaUrl()): string[] {
+/** What `up --monitor` prints once the stack is attached, for its Grafana and Prometheus. */
+export function notes(url = grafanaUrl(), prometheusPort: number = PROM_PORT): string[] {
   return [
     `Grafana:    ${url}  (admin/admin; anonymous view enabled)`,
-    `Prometheus: http://localhost:${PROM_PORT}  (Status -> Targets: rocketchat, mongodb, node-exporter)`,
+    `Prometheus: http://localhost:${String(prometheusPort)}  (Status -> Targets: rocketchat, mongodb, node-exporter)`,
     'Dashboards auto-provisioned: Rocket.Chat Metrics, MongoDB, Node Exporter Full.',
     'k6 Load Test dashboard is provisioned too; it fills in while a ' +
       '`loadtest --live` run streams metrics.',
@@ -472,6 +478,10 @@ export function isMonitoringNote(note: unknown): boolean {
   return (
     notes().includes(note) ||
     /^Grafana: {4}https?:\/\/\S+ {2}\(admin\/admin; anonymous view enabled\)$/u.test(note) ||
+    // A workspace whose Prometheus took another port than the preferred one.
+    /^Prometheus: http:\/\/localhost:\d+ {2}\(Status -> Targets: rocketchat, mongodb, node-exporter\)$/u.test(
+      note,
+    ) ||
     /^Container logs -> Loki: open the 'Rocket.Chat Logs' dashboard in Grafana \(https?:\/\/\S+\/d\/houston-logs\) - no login needed\.$/u.test(
       note,
     )

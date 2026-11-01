@@ -26,13 +26,22 @@ import {
 } from '../kube/status';
 import { dockerAvailable } from '../runner/host';
 import { projectStates, rcStatusByProject, servicesByProject } from '../runner/queries';
-import { type Metadata, externalUrl, listMeta, readMeta } from '../runner/record';
+import {
+  type Metadata,
+  externalUrl,
+  grafanaPortOf,
+  listMeta,
+  prometheusPortOf,
+  readMeta,
+  sidePortsOf,
+} from '../runner/record';
 import * as topology from '../topology';
 
 import * as naming from './naming';
 import * as notes from './notes';
 import { callHost } from './request';
 import { ESSENTIAL_SERVICES, PRESET_LINKS } from './types';
+import { presetPort, presetPorts } from '../../lib/presets/common';
 import { namesOf } from '../../lib/presets/composite';
 import { publicPathsOf } from '../../lib/presets/public';
 import { BUILD_IMAGE, isBuildTag } from '../../lib/versions';
@@ -281,10 +290,13 @@ export function reproLinks(meta: Metadata): { label: string; url: string; kind: 
       });
     }
   }
-  // Every preset of a composed workspace, in its canonical order.
+  // Every preset of a composed workspace, in its canonical order, on ITS ports: a second
+  // workspace with the same preset was given others, and the registry's open someone else's.
+  const held = sidePortsOf(meta);
   for (const name of namesOf(meta.preset)) {
-    const ports = config.PRESET_PORTS[name] ?? [];
-    for (const [label, idx] of PRESET_LINKS[name] ?? []) {
+    const linked = PRESET_LINKS[name] ?? [];
+    const ports = linked.length > 0 ? presetPorts(name, held) : [];
+    for (const [label, idx] of linked) {
       if (idx < ports.length) {
         links.push({
           label,
@@ -301,7 +313,7 @@ export function reproLinks(meta: Metadata): { label: string; url: string; kind: 
     const idp = String(
       bag(extra.params).idp ?? bag(bag(extra.preset_params).ldap).idp ?? '',
     ).toLowerCase();
-    const port = idp === 'saml' || idp === 'oidc' ? config.PRESET_PORTS[idp]?.[0] : undefined;
+    const port = idp === 'saml' || idp === 'oidc' ? presetPort(idp, 0, held) : undefined;
     if (port !== undefined) {
       links.push({ label: 'Keycloak', url: `http://${host}:${String(port)}`, kind: 'sidecar' });
     }
@@ -344,7 +356,7 @@ export function reproLinks(meta: Metadata): { label: string; url: string; kind: 
     if (topology.ofMeta(meta) !== topology.KUBERNETES) {
       links.push({
         label: 'Prometheus',
-        url: `http://localhost:${String(config.MONITOR_PORTS[0])}`,
+        url: `http://localhost:${String(prometheusPortOf(meta))}`,
         kind: 'monitor',
       });
     }
@@ -352,21 +364,30 @@ export function reproLinks(meta: Metadata): { label: string; url: string; kind: 
   return links;
 }
 
-/** Only houston-served TLS publishes Grafana; every cluster stack uses the sub-path. */
+/**
+ * Only houston-served TLS publishes Grafana; every cluster stack uses the sub-path. On the
+ * workspace's own Grafana port: a second monitored workspace's is not the preferred one.
+ */
 export function grafanaUrlOf(meta: Metadata): string {
   const publicUrl = isTruthy(bag(meta.extra).tls) ? meta.publicUrl : '';
-  return grafanaUrl(publicUrl, topology.ofMeta(meta) === topology.KUBERNETES || !!publicUrl);
+  return grafanaUrl(
+    publicUrl,
+    topology.ofMeta(meta) === topology.KUBERNETES || !!publicUrl,
+    grafanaPortOf(meta),
+  );
 }
 
-/** Origins the GUI may embed, derived from monitored workspaces served by houston. */
+/**
+ * Origins the GUI may embed, derived from monitored workspaces: the public name of one served
+ * by houston over HTTPS, and the loopback Grafana of every other, on its own port.
+ */
 export async function grafanaFrameOrigins(): Promise<string[]> {
   const origins = new Set<string>();
   for (const meta of await listMeta()) {
-    if (!isTruthy(bag(meta.extra).monitoring) || !isTruthy(bag(meta.extra).tls) || !meta.publicUrl)
-      continue;
+    if (!isTruthy(bag(meta.extra).monitoring)) continue;
     try {
-      const url = new URL(meta.publicUrl);
-      if (url.protocol === 'https:') origins.add(url.origin);
+      const url = new URL(grafanaUrlOf(meta));
+      if (url.protocol === 'https:' || url.hostname === 'localhost') origins.add(url.origin);
     } catch {
       // A hand-edited invalid URL grants no iframe origin.
     }

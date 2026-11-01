@@ -65,6 +65,11 @@ export interface Spec {
   /** --monitor: add Prometheus + Grafana. */
   monitoring: boolean;
   /**
+   * Their host ports, `[prometheus, grafana]`, as `extra.monitoring_ports` records them.
+   * Absent is the preferred pair (`monitoring.services`).
+   */
+  monitorPorts?: readonly number[];
+  /**
    * `up --env K=V` / `houston env --set`. Applied to every rocketchat service, LAST, so
    * it beats the preset. A null value removes the key.
    */
@@ -369,7 +374,7 @@ function addDepends(svc: Service, extra: readonly string[]): void {
 /** The Prometheus/Grafana add-on, wired to every Rocket.Chat instance. */
 function attachMonitoring(doc: ComposeDoc, rcServices: Record<string, Service>, s: Spec): void {
   if (!s.monitoring) return;
-  deepMerge(doc.services, monitoring.services(s.publicUrl)); // bare ports; bound below
+  deepMerge(doc.services, monitoring.services(s.publicUrl, s.monitorPorts)); // bare ports; bound below
   Object.assign(doc.volumes, monitoring.volumes());
   for (const svc of Object.values(rcServices)) {
     (svc.environment as Record<string, string>)[monitoring.RC_METRICS_ENV] = 'true';

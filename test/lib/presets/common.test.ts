@@ -124,18 +124,26 @@ describe('the --set coercions', () => {
 
 describe('the port registry lookups', () => {
   it('answers the same numbers config declares', () => {
-    expect(presetPorts('s3_minio')).toEqual([9000, 9001]);
-    expect(presetPort('s3_minio', 1)).toBe(9001);
-    expect(presetPort('ldap')).toBe(8082);
+    expect(presetPorts('s3_minio', {})).toEqual([9000, 9001]);
+    expect(presetPort('s3_minio', 1, {})).toBe(9001);
+    expect(presetPort('ldap', 0, {})).toBe(8082);
+  });
+
+  it("answers a workspace's own ports where it has them, and the registry's elsewhere", () => {
+    // Sparse, as a record keeps only what moved: Mailpit at 8026, everything else preferred.
+    const ports = { email: [8026], s3_minio: [9002, 9003] };
+    expect(presetPort('email', 0, ports)).toBe(8026);
+    expect(presetPorts('s3_minio', ports)).toEqual([9002, 9003]);
+    expect(presetPort('ldap', 0, ports)).toBe(8082);
   });
 
   it('raises rather than answering undefined for a preset with no reservation', () => {
     // A preset publishing a port nothing reserved is the collision PRESET_PORTS exists to
     // prevent; answering `undefined` would put that port in the compose file anyway.
-    expect(() => presetPorts('not-a-preset')).toThrow(
+    expect(() => presetPorts('not-a-preset', {})).toThrow(
       'no port is reserved for the preset "not-a-preset"',
     );
-    expect(() => presetPort('ldap', 4)).toThrow(
+    expect(() => presetPort('ldap', 4, {})).toThrow(
       'the preset "ldap" has no reserved port at index 4',
     );
   });

@@ -26,6 +26,24 @@ import { PORT_LOCK } from '../../../src/core/lifecycle/ports';
 import { heldBy, reproLock } from '../../../src/core/runner/locks';
 import type * as CreateK8sNS from '../../../src/core/lifecycle/create-k8s';
 
+/**
+ * `lifecycle/ports.claimSidePorts` on a machine where every preferred side and monitoring port
+ * is free: the preset as built, nothing moved, monitoring on its preferred pair.
+ */
+async function preferredSidePorts(
+  _name: string,
+  pre: unknown,
+  _rebuild: unknown,
+  options: { monitoring?: readonly string[] } = {},
+) {
+  return {
+    pre,
+    side: {},
+    monitoring: (options.monitoring ?? []).map((slot) => (slot === 'prometheus' ? 9090 : 5050)),
+    moved: [],
+  };
+}
+
 describe('a Kubernetes create of the e2ee preset', () => {
   afterEach(() => {
     for (const module of [
@@ -67,7 +85,7 @@ describe('a Kubernetes create of the e2ee preset', () => {
       jest.doMock('../../../src/core/lifecycle/ports', () => ({
         ...jest.requireActual('../../../src/core/lifecycle/ports'),
         pickHostPort: async () => 3391,
-        checkSidecarPorts: async () => undefined,
+        claimSidePorts: preferredSidePorts,
       }));
       jest.doMock('../../../src/core/lifecycle/tlsplan', () => ({
         ...jest.requireActual('../../../src/core/lifecycle/tlsplan'),
@@ -244,6 +262,27 @@ describe('publishing the actual Kubernetes host-port allocation', () => {
     await buildRecord(job);
     await writeRecordStep(job);
     expect((await readMeta(job.reproName)).extra.monitoring_ports).toEqual([5050]);
+  });
+
+  it('gives a second local Grafana forward the next free port, and records it', async () => {
+    // One monitored workspace per machine: a second `--monitor` on Kubernetes was refused
+    // while the first one's forward held 5050.
+    await writeRecord(
+      'grafana-held',
+      metadata({
+        name: 'grafana-held',
+        hostPort: 3417,
+        extra: { monitoring: true, monitoring_ports: [5050] },
+      }),
+    );
+    const job = pending('grafana-second', { monitor: true });
+    await resolvePairing(job);
+    settleAddressing(job);
+    await writeProvisionalRecord(job);
+    // Which free port depends on this machine; that it is not the held one does not.
+    expect(job.monitoringPorts).toHaveLength(1);
+    expect(job.monitoringPorts[0]).toBeGreaterThan(5050);
+    expect((await readMeta(job.reproName)).extra.monitoring_ports).toEqual(job.monitoringPorts);
   });
 
   it('does not claim local monitoring ports for public ingress monitoring', async () => {

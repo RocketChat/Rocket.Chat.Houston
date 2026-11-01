@@ -368,6 +368,26 @@ export async function containerIds(name: string): Promise<string[]> {
     .filter(Boolean);
 }
 
+/** The host ports a repro's RUNNING containers publish. */
+export async function publishedPorts(name: string): Promise<Set<number>> {
+  const result = await compose(name, ['ps', '--format', '{{.Ports}}'], { capture: true });
+  return hostPortsIn(String(result.stdout ?? ''));
+}
+
+/**
+ * The host ports in Docker's `Ports` text, a range expanded: one container publishing
+ * consecutive ports prints them as one (`127.0.0.1:9000-9001->9000-9001/tcp`, MinIO's pair).
+ */
+export function hostPortsIn(text: string): Set<number> {
+  const out = new Set<number>();
+  for (const match of text.matchAll(/:(\d+)(?:-(\d+))?->/gu)) {
+    const first = Number(match[1]);
+    const last = Math.min(Number(match[2] ?? match[1]), 65535);
+    for (let port = first; port <= last; port += 1) out.add(port);
+  }
+  return out;
+}
+
 /** `docker compose ps` for a repro, as service/state/status lines. */
 export async function ps(name: string): Promise<string> {
   const result = await compose(name, ['ps', '--format', '{{.Service}}\t{{.State}}\t{{.Status}}'], {

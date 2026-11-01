@@ -1177,6 +1177,26 @@ describe('env', () => {
     expect(recorded[4]).toMatch(/ {2}verify: houston env --name alpha\n$/u);
     expect(recorded[5]).not.toContain('verify:');
   });
+
+  test('names an unset key as removed, not among your overrides', async () => {
+    // `env --unset FOO` records FOO as null, and the footer went on saying "your overrides:
+    // FOO" for a variable that was gone (live matrix 2026-10-30, F1).
+    const read = (overrides: string[], removed: string[]): Promise<string> =>
+      ours('alpha', null, {
+        name: 'alpha',
+        env: [row('BAR', '1', true)],
+        overrides,
+        removed,
+        drift: [],
+        live_read: true,
+      });
+    const both = await read(['BAR', 'FOO'], ['FOO']);
+    expect(both).toContain('  your overrides: BAR\n  removed by you: FOO\n');
+    expect(both).not.toContain('no overrides');
+    const onlyRemoved = await read(['FOO'], ['FOO']);
+    expect(onlyRemoved).toContain('  removed by you: FOO\n');
+    expect(onlyRemoved).not.toMatch(/your overrides|no overrides/u);
+  });
 });
 
 /**

@@ -73,6 +73,18 @@ const DRACHTIO_PORT = 9022;
 const DRACHTIO_SECRET = 'houston';
 const SIP_PORT = 5060;
 const DEFAULT_RTP: readonly [number, number] = [20000, 20046];
+
+/**
+ * Every host port voice publishes at its defaults, lab PBX included. They cannot move -- phones
+ * and the PBX dial them by number -- so another workspace's side port must never be given one
+ * (`core/lifecycle/ports.ts` skips them when it looks for a free port).
+ */
+export const VOICE_DEFAULT_PORTS: readonly number[] = Object.freeze([
+  SIP_PORT,
+  ...Array.from({ length: DEFAULT_RTP[1] - DEFAULT_RTP[0] + 1 }, (_, i) => DEFAULT_RTP[0] + i),
+  EXTERNAL_SIP_PORT,
+  ...PBX_PORTS,
+]);
 // Labels of 1-63 letters, digits and inner hyphens; an IPv4 address is such a name too.
 const HOST =
   /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/u;

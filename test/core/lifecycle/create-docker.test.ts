@@ -27,8 +27,26 @@ import { createPlan } from '../../../src/core/lifecycle/create-docker';
 import type * as CreateDockerNS from '../../../src/core/lifecycle/create-docker';
 import type * as CreateK8sNS from '../../../src/core/lifecycle/create-k8s';
 import { MODE_ACME, tlsSpec } from '../../../src/core/tls';
-import { createReq } from '../../../src/core/lifecycle/types';
+import { type CreateReq, createReq } from '../../../src/core/lifecycle/types';
 import * as users from '../../../src/core/users';
+
+/**
+ * `lifecycle/ports.claimSidePorts` on a machine where every preferred side and monitoring port
+ * is free: the preset as built, nothing moved, monitoring on its preferred pair.
+ */
+async function preferredSidePorts(
+  _name: string,
+  pre: unknown,
+  _rebuild: unknown,
+  options: { monitoring?: readonly string[] } = {},
+) {
+  return {
+    pre,
+    side: {},
+    monitoring: (options.monitoring ?? []).map((slot) => (slot === 'prometheus' ? 9090 : 5050)),
+    moved: [],
+  };
+}
 
 describe('the image a rebuild runs', () => {
   it('is the one the workspace was built from, on the release it runs', async () => {
@@ -71,8 +89,7 @@ describe('claiming the Compose ports', () => {
     jest.resetModules();
     jest.doMock('../../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/ports'),
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
       pickHostPort: async () => 3100,
     }));
     jest.doMock('../../../src/core/lifecycle/preconditions', () => ({
@@ -104,8 +121,7 @@ describe('claiming the Compose ports', () => {
     jest.resetModules();
     jest.doMock('../../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/ports'),
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
       pickHostPort: async () => 3200,
     }));
     jest.doMock('../../../src/core/lifecycle/preconditions', () => ({
@@ -138,8 +154,7 @@ describe('claiming the Compose ports', () => {
     jest.resetModules();
     jest.doMock('../../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/ports'),
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
       pickHostPort: async () => 3611,
     }));
     jest.doMock('../../../src/core/lifecycle/preconditions', () => ({
@@ -190,8 +205,7 @@ describe('claiming the Compose ports', () => {
     }));
     jest.doMock('../../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/ports'),
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
     }));
     jest.doMock('../../../src/core/lifecycle/preconditions', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/preconditions'),
@@ -282,8 +296,7 @@ describe('the create path end to end, stopped at the write seam', () => {
     jest.doMock('../../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/ports'),
       pickHostPort: async () => 3001,
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
     }));
     jest.doMock('../../../src/core/lifecycle/tlsplan', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/tlsplan'),
@@ -1106,8 +1119,7 @@ describe('what a create says and generates before the build', () => {
     jest.doMock('../../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/ports'),
       pickHostPort: async () => 3001,
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
     }));
     jest.doMock('../../../src/core/lifecycle/tlsplan', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/tlsplan'),
@@ -1515,7 +1527,7 @@ describe('a rebuild across MongoDB image families', () => {
     }));
     jest.doMock('../../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/ports'),
-      checkSidecarPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
       pickHostPort: async () => 3300,
     }));
     jest.doMock('../../../src/core/lifecycle/preconditions', () => ({
@@ -1685,8 +1697,7 @@ describe('a name the HTTPS edge could not reach', () => {
     jest.resetModules();
     jest.doMock('../../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/ports'),
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
       pickHostPort: async () => 3300,
     }));
     jest.doMock('../../../src/core/lifecycle/preconditions', () => ({
@@ -1843,6 +1854,232 @@ describe('up --pin on a workspace that exists', () => {
     expect(await said('email')).toContain(
       "Use --force to rebuild it (a --force rebuild as 'email' removes the data 'ldap' kept).",
     );
+  });
+
+  it('says a different --port is ignored, rather than reusing the old one in silence', async () => {
+    // `up --name existing --port 3200` came up on the recorded port and named no ignored flag,
+    // so the caller opened 3200 and found nothing (live matrix 2026-10-30, F2).
+    jest.resetModules();
+    jest.doMock('../../../src/core/runner/queries', () => ({
+      ...jest.requireActual('../../../src/core/runner/queries'),
+      rcState: async () => 'running',
+    }));
+    jest.doMock('../../../src/core/lifecycle/ready', () => ({
+      ...jest.requireActual('../../../src/core/lifecycle/ready'),
+      restoreRoute: async () => undefined,
+    }));
+    jest.doMock('../../../src/core/lifecycle/inspect', () => ({
+      ...jest.requireActual('../../../src/core/lifecycle/inspect'),
+      summary: async () => ({}),
+    }));
+    const record = require('../../../src/core/runner/record') as {
+      writeRecord: typeof writeRecord;
+      metadata: typeof metadata;
+    };
+    await record.writeRecord(
+      'old',
+      record.metadata({ name: 'old', project: 'houston-old', rcVersion: '8.5.1', hostPort: 3014 }),
+    );
+    const createDocker =
+      require('../../../src/core/lifecycle/create-docker') as typeof CreateDockerNS;
+    const said = async (port: number): Promise<string> => {
+      const lines: string[] = [];
+      await createDocker.reuse(
+        'old',
+        false,
+        createReq({ version: '8.5.1', name: 'old', port }),
+        (event) => void lines.push(event.message),
+      );
+      return lines.join('\n');
+    };
+    expect(await said(3200)).toContain(
+      "'old' already exists and is reused as-is, ignoring requested port 3200 (existing: 3014). " +
+        'Use --force to rebuild it.',
+    );
+    expect(await said(3014)).not.toContain('ignoring requested');
+    expect(await said(0)).not.toContain('ignoring requested');
+  });
+
+  it('names every other flag a reuse does not apply, and stays quiet for the same command', async () => {
+    // --bind, --set, --root-url, --rc-image, --mongo, --https, --domain and --env each came back
+    // as-is with nothing said (live 2026-10-30, after F2). Re-running the command that made it
+    // must still say nothing.
+    jest.resetModules();
+    jest.doMock('../../../src/core/runner/queries', () => ({
+      ...jest.requireActual('../../../src/core/runner/queries'),
+      rcState: async () => 'running',
+    }));
+    jest.doMock('../../../src/core/lifecycle/ready', () => ({
+      ...jest.requireActual('../../../src/core/lifecycle/ready'),
+      restoreRoute: async () => undefined,
+    }));
+    jest.doMock('../../../src/core/lifecycle/inspect', () => ({
+      ...jest.requireActual('../../../src/core/lifecycle/inspect'),
+      summary: async () => ({}),
+    }));
+    const record = require('../../../src/core/runner/record') as {
+      writeRecord: typeof writeRecord;
+      metadata: typeof metadata;
+    };
+    // Recorded as the repository; the tag is the release.
+    const image = 'registry.rocket.chat/rocketchat/rocket.chat';
+    await record.writeRecord(
+      'old',
+      record.metadata({
+        name: 'old',
+        project: 'houston-old',
+        rcVersion: '8.5.1',
+        rcImage: image,
+        mongoTag: '7.0',
+        preset: 'ldap',
+        hostPort: 3014,
+        rootUrl: 'http://127.0.0.1:3014',
+        extra: { bind_host: '127.0.0.1', params: { users: '5' }, env: { KEEP: '1' } },
+      }),
+    );
+    const createDocker =
+      require('../../../src/core/lifecycle/create-docker') as typeof CreateDockerNS;
+    const said = async (
+      asked: Partial<CreateReq>,
+      resolved: Partial<Resolved>,
+    ): Promise<string> => {
+      const lines: string[] = [];
+      await createDocker.reuse(
+        'old',
+        false,
+        createReq({ version: '8.5.1', name: 'old', ...asked }),
+        (event) => void lines.push(event.message),
+        {
+          streamOutput: false,
+          resolved: {
+            rcVersion: '8.5.1',
+            rcImage: image,
+            mongoTag: '7.0',
+            ...resolved,
+          } as Resolved,
+          presetName: 'ldap',
+        },
+      );
+      return lines.join('\n');
+    };
+    const everything = await said(
+      {
+        bind: '0.0.0.0',
+        rootUrl: 'http://box.example:3014',
+        rcImage: 'example/rc:custom',
+        mongo: '8.0',
+        domain: 'old.example.com',
+        params: { users: '9' },
+        env: { KEEP: '1', SECRET_TOKEN: 'hunter2' },
+      },
+      { rcImage: 'example/rc:custom', mongoTag: '8.0' },
+    );
+    for (const part of [
+      'bind address 0.0.0.0 (existing: 127.0.0.1)',
+      'root URL http://box.example:3014 (existing: http://127.0.0.1:3014)',
+      `image example/rc:custom (existing: ${image}:8.5.1)`,
+      'MongoDB 8.0 (existing: 7.0)',
+      'domain old.example.com (existing: none, plain HTTP)',
+      '--set users=9',
+      'environment SECRET_TOKEN (`houston env --set` changes it in place)',
+      'Use --force to rebuild it.',
+    ]) {
+      expect({ part, said: everything.includes(part) }).toEqual({ part, said: true });
+    }
+    expect(everything).not.toContain('hunter2');
+    expect(everything).not.toContain('KEEP');
+    expect(await said({ https: true }, {})).toContain('HTTPS (existing: plain HTTP)');
+    expect(
+      await said(
+        {
+          port: 3014,
+          bind: '127.0.0.1',
+          rootUrl: 'http://127.0.0.1:3014/',
+          rcImage: `${image}:8.5.1`,
+          mongo: '7.0',
+          params: { users: '5' },
+          env: { KEEP: '1' },
+        },
+        { rcImage: `${image}:8.5.1` },
+      ),
+    ).not.toContain('ignoring requested');
+  });
+
+  it('keeps secrets out, reads a domain as TLS does, and names only what was typed', async () => {
+    // Review 2026-10-31: a TURN password typed in --set was printed; `--domain
+    // https://RC.Example.com/` re-run on rc.example.com warned; an IdP host houston derived
+    // itself was reported as a --set; --replicas, --reg-token and --email went unmentioned;
+    // and an unreadable recorded public URL failed a harmless reuse.
+    jest.resetModules();
+    jest.doMock('../../../src/core/runner/queries', () => ({
+      ...jest.requireActual('../../../src/core/runner/queries'),
+      rcState: async () => 'running',
+    }));
+    jest.doMock('../../../src/core/lifecycle/ready', () => ({
+      ...jest.requireActual('../../../src/core/lifecycle/ready'),
+      restoreRoute: async () => undefined,
+    }));
+    jest.doMock('../../../src/core/lifecycle/inspect', () => ({
+      ...jest.requireActual('../../../src/core/lifecycle/inspect'),
+      summary: async () => ({}),
+    }));
+    const record = require('../../../src/core/runner/record') as {
+      writeRecord: typeof writeRecord;
+      metadata: typeof metadata;
+    };
+    const write = async (values: Partial<Metadata>): Promise<void> =>
+      await record.writeRecord(
+        'old',
+        record.metadata({
+          name: 'old',
+          project: 'houston-old',
+          rcVersion: '8.5.1',
+          preset: 'voice',
+          hostPort: 3014,
+          ...values,
+        }),
+      );
+    const createDocker =
+      require('../../../src/core/lifecycle/create-docker') as typeof CreateDockerNS;
+    const said = async (
+      asked: Partial<CreateReq>,
+      typedParams: Record<string, unknown> = asked.params ?? {},
+    ): Promise<string> => {
+      const lines: string[] = [];
+      await createDocker.reuse(
+        'old',
+        false,
+        createReq({ version: '8.5.1', name: 'old', ...asked }),
+        (event) => void lines.push(event.message),
+        {
+          streamOutput: false,
+          resolved: { rcVersion: '8.5.1' } as Resolved,
+          presetName: '',
+          typedParams,
+        },
+      );
+      return lines.join('\n');
+    };
+    await write({});
+    const turn = await said({ params: { ice_servers: 'alice:s3cret@turn:turn.example.com:3478' } });
+    expect(turn).toContain('ignoring requested --set ice_servers=');
+    expect(turn).not.toContain('s3cret');
+    const token = await said({ regToken: 'tok-123' });
+    expect(token).toContain('the registration token');
+    expect(token).not.toContain('tok-123');
+    expect(await said({ acmeEmail: 'a@example.com' })).toContain('HTTPS (existing: plain HTTP)');
+    // Derived by houston, not typed: nothing to say.
+    expect(await said({ params: { idp_host: 'box' } }, {})).not.toContain('ignoring requested');
+    await write({ publicUrl: 'https://rc.example.com' });
+    expect(await said({ domain: 'https://RC.Example.com/' })).not.toContain('ignoring requested');
+    expect(await said({ domain: 'other.example.com' })).toContain(
+      'domain other.example.com (existing: rc.example.com)',
+    );
+    await write({ publicUrl: 'not a url' });
+    await expect(said({})).resolves.not.toContain('ignoring requested');
+    await write({ preset: 'multi-instance', extra: { instances: 3 } });
+    expect(await said({ replicas: 4 })).toContain('--replicas 4 (existing: 3)');
+    expect(await said({ replicas: 3 })).not.toContain('ignoring requested');
   });
 });
 

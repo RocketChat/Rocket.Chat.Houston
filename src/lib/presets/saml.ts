@@ -12,15 +12,17 @@
  *
  * Cert handling: Keycloak generates its signing key on realm import, so houston fetches
  * the cert at runtime (post_ready) and applies it to RC -- no manual exchange. The IdP is
- * published on host port 8081 (browser-reachable).
+ * published on the workspace's saml port, 8081 unless another workspace holds it
+ * (browser-reachable).
  */
+import type { PortMap } from '../config';
+
 import { guide } from './guides';
-import { EMAIL_2FA, intParam, presetPort, presetPorts, strParam } from './common';
+import { EMAIL_2FA, intParam, presetPort, strParam } from './common';
 import * as keycloak from './keycloak';
 import { type Params, register } from './registry';
 import { emptyPreset, type Preset } from './types';
 
-const KC_PORT = presetPort('saml');
 const KC_REALM = keycloak.REALM;
 
 /** Package the shared IdP rendering with SAML-specific setup and guidance. */
@@ -31,6 +33,7 @@ function samlPreset(
   services: Record<string, Record<string, unknown>>,
   env: Record<string, string>,
   prefix: string,
+  kcPort: number,
 ): Preset {
   const realm = keycloak.realmJson([keycloak.samlClient()], users, prefix);
   return {
@@ -38,7 +41,7 @@ function samlPreset(
     description:
       `Keycloak IdP with a generated SAML realm (${String(users)} users ${prefix}user1..${prefix}user` +
       `${String(users)}, password=username). Click 'Keycloak SSO', log in as ` +
-      `${prefix}user1/${prefix}user1. Keycloak admin at http://${idpHost}:${String(KC_PORT)} ` +
+      `${prefix}user1/${prefix}user1. Keycloak admin at http://${idpHost}:${String(kcPort)} ` +
       "(admin/admin, realm 'houston').",
     env,
     softEnv: [EMAIL_2FA],
@@ -47,7 +50,7 @@ function samlPreset(
     requiresLicense: false,
     source: 'built-in (dynamic)',
     files: [['saml/keycloak-realm.json', realm]],
-    kubernetesManifests: [keycloak.manifests(realm, KC_PORT)],
+    kubernetesManifests: [keycloak.manifests(realm, kcPort)],
     paramsHelp: {
       users: 'number of Keycloak test users (default 5)',
       idp_host:
@@ -55,7 +58,7 @@ function samlPreset(
         'machine running houston only; from another computer create the workspace with ' +
         'HTTPS on a domain instead, and Keycloak is at <workspace URL>/keycloak)',
     },
-    ports: [...presetPorts('saml')],
+    ports: [kcPort],
     guides: [
       guide('saml', {
         summary: `Keycloak as a SAML identity provider with ${String(users)} users.`,
@@ -72,7 +75,7 @@ function samlPreset(
           `Sign in as ${prefix}user1 / ${prefix}user1.`,
         ],
         know: [
-          `SAML sends your browser to http://${idpHost}:${String(KC_PORT)}: that address must resolve and be reachable from wherever the browser runs.`,
+          `SAML sends your browser to http://${idpHost}:${String(kcPort)}: that address must resolve and be reachable from wherever the browser runs.`,
           idpHost === 'localhost'
             ? `It is localhost, so the browser must be on the machine running houston. ${keycloak.FROM_ANOTHER_COMPUTER}`
             : '',
@@ -81,7 +84,7 @@ function samlPreset(
       }),
     ],
     notes: [
-      `SAML sends your BROWSER to http://${idpHost}:${String(KC_PORT)} — that address has`,
+      `SAML sends your BROWSER to http://${idpHost}:${String(kcPort)} — that address has`,
       '  to resolve and be reachable from wherever the browser is running.',
       ...(idpHost !== 'localhost'
         ? []
@@ -90,11 +93,11 @@ function samlPreset(
             keycloak.FROM_ANOTHER_COMPUTER,
             '  (Keycloak refuses a request that arrives on any other name.)',
           ]),
-      `Keycloak admin console: http://${idpHost}:${String(KC_PORT)}  (admin / admin)`,
+      `Keycloak admin console: http://${idpHost}:${String(kcPort)}  (admin / admin)`,
       `  Your SAML users live in the '${KC_REALM}' realm, NOT 'master' (the`,
       '  default view). Switch the realm dropdown (top-left) to ' +
         `'${KC_REALM}', or open Users directly:`,
-      `    http://${idpHost}:${String(KC_PORT)}/admin/master/console/#/${KC_REALM}/users`,
+      `    http://${idpHost}:${String(kcPort)}/admin/master/console/#/${KC_REALM}/users`,
       "  ('temporary admin' banner on master is normal Keycloak dev mode — ignore it)",
     ],
     postReady: [
@@ -109,8 +112,9 @@ function samlPreset(
   };
 }
 
-export function build(params: Params): Preset {
+export function build(params: Params, ports: PortMap): Preset {
   const users = intParam(params, 'users', 5);
+  const kcPort = presetPort('saml', 0, ports);
   // THE BROWSER'S ADDRESS FOR THE IdP, not houston's. `entry_point` is the URL the user's
   // browser is redirected to, and it was hardcoded to `localhost` -- which names the
   // browser's OWN machine. On a shared box (the deployment this tool now supports: one
@@ -125,18 +129,26 @@ export function build(params: Params): Preset {
   // by changing nothing but the hostname. The two must agree, which is why this is one
   // knob and not a guess.
   const idpHost = strParam(params, 'idp_host', 'localhost');
-  const samlEp = `http://${idpHost}:${String(KC_PORT)}/realms/${KC_REALM}/protocol/saml`;
+  const samlEp = `http://${idpHost}:${String(kcPort)}/realms/${KC_REALM}/protocol/saml`;
   // FETCHED BY houston, so it stays on loopback whatever the browser uses. Same split as
   // root_url/public_url elsewhere in this codebase: an internal caller and a browser do
   // not need the same address, and giving the internal one the public address is how
   // `--set idp_host=<public name>` would break its own cert fetch on a workspace bound to
   // 127.0.0.1.
-  const descriptor = `http://localhost:${String(KC_PORT)}/realms/${KC_REALM}/protocol/saml/descriptor`;
+  const descriptor = `http://localhost:${String(kcPort)}/realms/${KC_REALM}/protocol/saml/descriptor`;
   const services = {
-    keycloak: keycloak.service('./saml/keycloak-realm.json', KC_PORT),
+    keycloak: keycloak.service('./saml/keycloak-realm.json', kcPort),
   };
   const prefix = strParam(params, keycloak.USER_PREFIX_PARAM, '');
-  return samlPreset(users, idpHost, descriptor, services, keycloak.samlSettings(samlEp), prefix);
+  return samlPreset(
+    users,
+    idpHost,
+    descriptor,
+    services,
+    keycloak.samlSettings(samlEp),
+    prefix,
+    kcPort,
+  );
 }
 
 register('saml', build);

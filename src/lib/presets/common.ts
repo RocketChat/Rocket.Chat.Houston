@@ -112,17 +112,24 @@ export function safeLoadAll(text: string): unknown[] {
  */
 export const EMAIL_2FA = 'OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_By_Email_Enabled';
 
-export function presetPorts(name: string): readonly number[] {
-  const ports = config.PRESET_PORTS[name];
-  if (ports === undefined)
+/**
+ * A preset's host ports in one workspace: the ones `ports` gives it, else the registry's.
+ *
+ * `ports` is REQUIRED, and sparse: `{}` is every preferred port, `{ email: [8026] }` moves
+ * Mailpit alone. Required so a builder that never received the workspace's ports does not
+ * quietly publish the preferred ones, which would open someone else's Mailpit.
+ */
+export function presetPorts(name: string, ports: config.PortMap): readonly number[] {
+  const given = ports[name] ?? config.PRESET_PORTS[name];
+  if (given === undefined)
     throw new Error(`no port is reserved for the preset ${JSON.stringify(name)}`);
-  return ports;
+  return given;
 }
 
-/** The first registry port for a preset -- the one a single-port preset publishes. */
-export function presetPort(name: string, index = 0): number {
-  const ports = presetPorts(name);
-  const port = ports[index];
+/** One of a preset's host ports -- the first is the one a single-port preset publishes. */
+export function presetPort(name: string, index: number, ports: config.PortMap): number {
+  const all = presetPorts(name, ports);
+  const port = all[index];
   if (port === undefined) {
     throw new Error(
       `the preset ${JSON.stringify(name)} has no reserved port at index ${String(index)}`,

@@ -57,8 +57,10 @@ creating it again:
 The commands that delete data ask first, and `prune` lists what it will remove. Add
 `--yes` to skip the question in a script.
 
-**`up` on an existing name reuses that workspace exactly as it was.** If you asked
-for a different version, preset or monitoring, it warns and ignores the request. To try
+**`up` on an existing name reuses that workspace exactly as it was.** What you asked for
+differently (version, preset, monitoring, port, bind address, `--set`, root URL, image,
+MongoDB, HTTPS name, `--replicas`, `--env`, licence, registration token) is named in a warning
+and ignored. To try
 another version, use `houston upgrade` or pick a new name. `--force` rebuilds the
 workspace, and `--fresh` also wipes its data. A rebuild keeps what you leave out: its
 deployment, instance count, cluster, admin password, monitoring, `--root-url`, pin and port
@@ -106,11 +108,19 @@ houston up --version 8.5.1 --name ticket-1234 --preset ldap --wait
 For `ldap`, `saml` and `oidc`, sign in as **`user1` / `user1`**. `houston info` lists
 each preset's consoles and logins.
 
-Those consoles listen on fixed ports on this machine (phpLDAPadmin 8082, Mailpit 8025,
-Keycloak 8081 or 8085, MinIO 9000 and 9001, the livechat demo 8090), so one machine holds
-one workspace per such preset, and one with monitoring. A workspace that is only `down`
-still holds its ports, because it comes back on them: to start another `ldap` workspace,
-delete the first with `down --volumes` (its data goes too), or use another machine.
+Those consoles prefer these ports on this machine: phpLDAPadmin 8082, Mailpit 8025,
+Keycloak 8081 or 8085, MinIO 9000 and 9001, the livechat demo 8090. The first workspace
+with a preset gets them. Another workspace with the same preset, yours or a colleague's,
+gets the next free port, and keeps it through stop, start, `up --force` and upgrade. If
+something else took that port while the workspace was stopped, `up --force` moves it to a
+free one and says so. `houston info` and the GUI give each workspace's own addresses.
+Monitoring turned off and on again takes whichever pair is free then. A workspace that is only
+`down` still holds its ports, because it comes back on them. Voice is the exception: its
+call ports are dialled by number, so one machine runs one voice workspace.
+
+Two consoles on `localhost` with different ports share the browser's cookies, so signing in
+to one workspace's Keycloak or Grafana can sign you out of another's. Use a private window
+for the second, as you would for two Rocket.Chat workspaces.
 
 Presets take parameters with `--set key=value`. `houston presets` prints each one's
 parameters and defaults:
@@ -466,6 +476,8 @@ houston monitor --name ticket-1234 --off
 - **Grafana** on a Docker loopback workspace is at `http://localhost:5050` (`admin` / `admin`, anonymous Viewer on),
   with the Rocket.Chat, MongoDB and Node Exporter dashboards.
 - **Prometheus** is at `http://localhost:9090`.
+- Another monitored workspace gets the next free pair, such as 5051 and 9091. `houston info`
+  and the GUI give each workspace's own Grafana.
 - Container logs go to **Loki**, readable in the *Rocket.Chat Logs* dashboard.
 
 On Docker, log collection covers only that workspace. On Kubernetes, one shared stack
@@ -477,7 +489,9 @@ With houston-served HTTPS (`--domain` or `--https`), both runtimes serve Grafana
 the Logs link and the live load-test dashboard. The login remains `admin/admin`
 on this public name; anonymous users can view dashboards.
 
-Kubernetes loopback forwards serve `http://localhost:5050/grafana/`. Every monitored
+Kubernetes loopback forwards serve `http://localhost:5050/grafana/`, and the next free port
+for each further monitored workspace. That Grafana is one per cluster, and it builds its
+own absolute links (sign-in redirects, share links) on 5050. Every monitored
 HTTPS workspace has its own Ingress into the shared stack. Under ACME this requests
 an extra certificate per workspace. Absolute Grafana links name the first public
 host configured for the stack; other workspace hosts serve the same relative paths.

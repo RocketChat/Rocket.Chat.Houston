@@ -11,6 +11,7 @@ import {
   dashboard,
   files,
   grafanaUrl,
+  isMonitoringNote,
   notes,
   sd,
   services,
@@ -137,6 +138,36 @@ describe('Grafana public URL regression', () => {
     expect(result[0]).toBe('Grafana:    https://h/grafana  (admin/admin; anonymous view enabled)');
     expect(result.at(-1)).toContain('(https://h/grafana/d/houston-logs)');
     expect(result[1]).toContain('http://localhost:9090');
+  });
+});
+
+describe('a second monitored workspace, on the ports it was given', () => {
+  it('publishes Prometheus and Grafana there, and says so', () => {
+    const svcs = services('', [9091, 5051]);
+    expect(svcs.prometheus?.ports).toEqual(['9091:9090']);
+    expect(svcs.grafana?.ports).toEqual(['5051:3000']);
+    expect(grafanaUrl('', false, 5051)).toBe('http://localhost:5051');
+    expect(grafanaUrl('', true, 5051)).toBe('http://localhost:5051/grafana');
+    const lines = notes(grafanaUrl('', false, 5051), 9091);
+    expect(lines[0]).toContain('http://localhost:5051');
+    expect(lines[1]).toContain('http://localhost:9091');
+    expect(lines.join('\n')).not.toMatch(/localhost:(9090|5050)\b/u);
+  });
+
+  it('recognises its notes, so detaching drops them rather than leaving a stale address', () => {
+    // The line a second workspace's record holds, as written: matched only at 9090, it stayed
+    // behind after `monitor --off`, and a re-attach added a second one.
+    expect(
+      isMonitoringNote(
+        'Prometheus: http://localhost:9091  (Status -> Targets: rocketchat, mongodb, node-exporter)',
+      ),
+    ).toBe(true);
+    for (const line of notes(grafanaUrl('', false, 5051), 9091)) {
+      expect({ line, ours: isMonitoringNote(line) }).toEqual({ line, ours: true });
+    }
+    expect(isMonitoringNote('Prometheus: http://localhost:9091  (somebody else wrote this)')).toBe(
+      false,
+    );
   });
 });
 

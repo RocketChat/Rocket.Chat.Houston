@@ -286,50 +286,26 @@ async function doRestore(b, into) {
 }
 
 // ---- restore as new ------------------------------------------------------------
-// A dialog rather than a confirm, because it may have to say why it cannot be done. The
-// bundle's scenario is built again, and its side ports (Mailpit's 8025, phpLDAPadmin's
-// 8082, ...) are published once per machine: while another workspace holds them, usually
-// the very one the backup came from, the create is refused -- and that used to be learned
-// from a job that had already started.
+// A dialog rather than a confirm, because it may have to say who can use the bundle. The
+// bundle's scenario is built again on side ports of its own: while another workspace holds
+// the preferred ones (usually the very one the backup came from) the copy gets the next free
+// ones, so nothing about them stands in the way.
 let RESTORE = null;
 async function openRestoreNew(b) {
-  let held = null, refusal = "";
+  let refusal = "";
   try {
     const answer = await ctx.api("/api/backups/compatibility", {
       method: "POST", body: JSON.stringify({ bundle: b.path }),
     });
-    held = answer.held || null;
     refusal = answer.refusal || "";       // the server's own answer: only the owner or an admin
   } catch (e) { ctx.toast(String(e.message || e), "bad"); return; }
   RESTORE = b;
   ctx.$("#restore-what").textContent = `A new workspace from ${shortName(b.path)}: `
     + `Rocket.Chat ${b.rc_version}${b.preset ? `, ${b.preset}` : ""}, with the data it holds.`;
-  const box = ctx.$("#restore-held"), into = ctx.$("#restore-into");
-  const source = b.repro && ctx.ALL_REPROS.some((r) => r.name === b.repro) ? b.repro : "";
-  box.hidden = !held;
-  into.hidden = !held || !source;
-  ctx.$("#restore-go").disabled = !!held;
-  if (held) {
-    // AMBER: it wants you to choose another way, and nothing has been destroyed. On a
-    // shared server the holder is often a colleague's: name them, and never advise
-    // deleting what is not the reader's.
-    const holder = ctx.ALL_REPROS.find((r) => r.name === held.name);
-    const owner = (holder && (holder.owner || holder.created_by)) || "";
-    const mine = !!owner && owner === ctx.ME;
-    const drop = `delete ${held.name} (that deletes its data), then restore this backup as new from Backups`;
-    const ways = [source && !refusal && `restore into ${source}, which replaces its data`,
-      !owner ? `if it is yours, ${drop}` : mine ? drop
-        : `ask ${owner} whether ${held.name} is still needed`].filter(Boolean);
-    box.textContent = `${held.name} already publishes port${held.ports.length > 1 ? "s" : ""} `
-      + `${held.ports.join(", ")}, which the ${b.preset} preset needs too. On this server a `
-      + `port serves one workspace at a time, so this restore would be refused.`
-      + (owner ? ` ${held.name} belongs to ${mine ? "you" : owner}.` : "")
-      + ` Instead: ${ways.join("; or ")}.`;
-    into.textContent = `Restore into ${source} instead`;
-  }
   // Shown but not offered to someone the server would refuse, saying who can.
-  into.disabled = !!refusal;
-  into.title = refusal ? `${refusal[0].toUpperCase()}${refusal.slice(1)}.` : "";
+  const go = ctx.$("#restore-go");
+  go.disabled = !!refusal;
+  go.title = refusal ? `${refusal[0].toUpperCase()}${refusal.slice(1)}.` : "";
   ctx.$("#restore-dialog").showModal();
 }
 
@@ -347,11 +323,6 @@ async function submitRestoreNew() {
       if (ctx.VIEW === "backups") ctx.loadRepros().then(openBackups);
     });
   } catch (e) { ctx.toast(e.message); }
-}
-
-function restoreIntoInstead() {
-  ctx.$("#restore-dialog").close();
-  doRestore(RESTORE, RESTORE.repro);
 }
 
 async function doDeleteBackup(b) {
@@ -519,7 +490,6 @@ Object.defineProperties(ctx, {
   "openBackups": { enumerable: true, get: () => openBackups },
   "openRestoreNew": { enumerable: true, get: () => openRestoreNew },
   "submitRestoreNew": { enumerable: true, get: () => submitRestoreNew },
-  "restoreIntoInstead": { enumerable: true, get: () => restoreIntoInstead },
   "openRollback": { enumerable: true, get: () => openRollback },
   "submitRollback": { enumerable: true, get: () => submitRollback },
   "openHandOver": { enumerable: true, get: () => openHandOver },
@@ -534,4 +504,4 @@ Object.defineProperties(ctx, {
   "ENV_SETTING_PREFIX": { enumerable: true, get: () => ENV_SETTING_PREFIX },
   "doEnvChange": { enumerable: true, get: () => doEnvChange },
 });
-export { renderEnv, fmtBytes, shortName, renderBackups, backupTable, openBackups, openRestoreNew, submitRestoreNew, restoreIntoInstead, openRollback, submitRollback, openHandOver, submitHandOver, doBackup, doRestore, doDeleteBackup, UPGRADE_TARGET, openUpgrade, checkUpgradePlan, submitUpgrade, ENV_SETTING_PREFIX, doEnvChange };
+export { renderEnv, fmtBytes, shortName, renderBackups, backupTable, openBackups, openRestoreNew, submitRestoreNew, openRollback, submitRollback, openHandOver, submitHandOver, doBackup, doRestore, doDeleteBackup, UPGRADE_TARGET, openUpgrade, checkUpgradePlan, submitUpgrade, ENV_SETTING_PREFIX, doEnvChange };

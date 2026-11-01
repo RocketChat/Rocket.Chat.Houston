@@ -135,6 +135,62 @@ export function adminPass(meta: Metadata): string {
   return meta.adminPassword || config.ADMIN_PASSWORD;
 }
 
+/** A host port as a record may spell it: an integer 1024-65535, else null. */
+function hostPort(value: unknown): number | null {
+  const port = typeof value === 'string' && /^\d+$/u.test(value) ? Number(value) : value;
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1024 && port <= 65535
+    ? port
+    : null;
+}
+
+/**
+ * The workspace's side ports, sparse over `config.PRESET_PORTS`: `extra.side_ports` names only
+ * the presets whose ports MOVED because another workspace held them. A workspace on the
+ * preferred ports, and every record written before ports could move, has no key -- and those
+ * presets publish their preferred ports, which is what such a workspace runs.
+ *
+ * Read it through this, never directly. A hand-edited record is a trust boundary: an entry
+ * that is not a registry preset, or not a list of that preset's length of ports 1024-65535,
+ * is dropped, so that preset answers its preferred ports rather than a nonsense address.
+ */
+export function sidePortsOf(meta: Metadata): config.PortMap {
+  // A record whose `extra` is null is read as having none, as `recordedOwner` reads it.
+  const recorded = ((meta.extra as Record<string, unknown> | null) ?? {}).side_ports;
+  if (recorded === null || typeof recorded !== 'object' || Array.isArray(recorded)) return {};
+  const out: Record<string, readonly number[]> = {};
+  for (const [name, value] of Object.entries(recorded as Record<string, unknown>)) {
+    const preferred = config.PRESET_PORTS[name];
+    if (preferred === undefined || !Array.isArray(value) || value.length !== preferred.length)
+      continue;
+    const ports = value.map(hostPort);
+    if (ports.every((port) => port !== null)) out[name] = ports as number[];
+  }
+  return out;
+}
+
+/**
+ * Monitoring's recorded host ports, by POSITION as `extra.monitoring_ports` holds them: Docker
+ * publishes `[prometheus, grafana]`, Kubernetes forwards Grafana alone, `[grafana]`. Absent --
+ * never monitored, or a public workspace -- is the preferred pair.
+ */
+function monitoringPorts(meta: Metadata): number[] {
+  const recorded = ((meta.extra as Record<string, unknown> | null) ?? {}).monitoring_ports;
+  if (!Array.isArray(recorded) || recorded.length === 0 || recorded.length > 2) return [];
+  const ports = recorded.map(hostPort);
+  return ports.every((port) => port !== null) ? (ports as number[]) : [];
+}
+
+/** The workspace's Grafana host port: its last recorded monitoring port, else the preferred. */
+export function grafanaPortOf(meta: Metadata): number {
+  return monitoringPorts(meta).at(-1) ?? config.MONITOR_PORTS[1];
+}
+
+/** The workspace's Prometheus host port: the first of a recorded pair, else the preferred. */
+export function prometheusPortOf(meta: Metadata): number {
+  const ports = monitoringPorts(meta);
+  return ports.length === 2 ? (ports[0] as number) : config.MONITOR_PORTS[0];
+}
+
 /** Who owns it, as `ownership.ownerOf` reads it, for a message: '' when the record names nobody. */
 export function recordedOwner(meta: Metadata): string {
   const extra = (meta.extra as Record<string, unknown> | null) ?? {};

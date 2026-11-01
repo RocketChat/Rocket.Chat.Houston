@@ -3160,14 +3160,17 @@ export async function renderHuman(
               'not a statement about what is running.\n',
           );
         }
-        const overrides = Array.isArray(result.overrides)
-          ? result.overrides.map((key) => toTextAny(key))
+        const removed = Array.isArray(result.removed)
+          ? result.removed.map((key) => toTextAny(key))
           : [];
-        io.writeOut(
-          overrides.length > 0
-            ? `  your overrides: ${overrides.join(', ')}\n`
-            : '  no overrides — this is the preset/base environment.\n',
-        );
+        const overrides = Array.isArray(result.overrides)
+          ? result.overrides.map((key) => toTextAny(key)).filter((key) => !removed.includes(key))
+          : [];
+        if (overrides.length > 0) io.writeOut(`  your overrides: ${overrides.join(', ')}\n`);
+        if (removed.length > 0) io.writeOut(`  removed by you: ${removed.join(', ')}\n`);
+        if (overrides.length === 0 && removed.length === 0) {
+          io.writeOut('  no overrides — this is the preset/base environment.\n');
+        }
         const named = display(invocation.options.name) === '' ? '' : ` --name ${name}`;
         io.writeOut(
           `  a Rocket.Chat setting: houston env --setting Some_Setting_Id=value${named}\n`,

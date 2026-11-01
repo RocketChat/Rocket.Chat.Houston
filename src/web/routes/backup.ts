@@ -5,7 +5,6 @@ import * as path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 
 import { resolveName } from '../../core/lifecycle/naming';
-import { sidecarHolder } from '../../core/lifecycle/ports';
 import { readMeta } from '../../core/runner/record';
 import { ConflictError, ValidationError } from '../../lib/errors';
 import { pathExpandUser, pathResolve, joinPath } from '../../lib/home';
@@ -166,14 +165,12 @@ export function register(app: FastifyInstance): void {
     const manifest = await backup.readManifest(bundle);
     const name = orText(body.name);
     if (name === '') {
-      // AS NEW, which builds the bundle's preset again: its side ports are published once
-      // per box, so while another workspace holds them the create is refused -- from a job
-      // that has already started. Who holds them is said here, before anything starts.
-      const held = await sidecarHolder(String(manifest.preset ?? ''));
-      // And whether THIS viewer may use the bundle at all, so the dialog can say who can
-      // before a click is refused: '' when they may.
+      // AS NEW, which builds the bundle's preset again, on side ports of its own: another
+      // workspace holding the preferred ones gives it the next free ones, so there is no
+      // holder to name. Whether THIS viewer may use the bundle at all is said here, so the
+      // dialog can say who can before a click is refused: '' when they may.
       const refusal = await bundleRefusal(bundle, actor(request));
-      return { manifest, compatibility: null, held, refusal };
+      return { manifest, compatibility: null, refusal };
     }
     const meta = await readMeta(await resolveName(name));
     return { manifest, compatibility: backupCompatModule().compatibility(manifest, meta) };

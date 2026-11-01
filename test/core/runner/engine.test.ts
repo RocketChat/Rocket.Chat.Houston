@@ -280,3 +280,24 @@ describe('reading a repro back', () => {
     }
   });
 });
+
+describe("the host ports in Docker's Ports text", () => {
+  it('reads each one, a grouped range expanded', () => {
+    // MinIO publishes 9000 and 9001 from one container, which Docker prints as one range: read
+    // as nothing, a rebuild moved a running MinIO off its own ports (review 2026-10-31).
+    expect(
+      [
+        ...engine.hostPortsIn(
+          [
+            '127.0.0.1:8025->8025/tcp',
+            '127.0.0.1:9000-9001->9000-9001/tcp',
+            '0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp',
+            ':::8082->8080/tcp',
+            '127.0.0.1:20000-20002->20000-20002/udp',
+            '',
+          ].join('\n'),
+        ),
+      ].sort((a, b) => a - b),
+    ).toEqual([3000, 8025, 8082, 9000, 9001, 20000, 20001, 20002]);
+  });
+});

@@ -439,7 +439,9 @@ export function resolveAxes(options: ResolveAxesOptions = {}): Axes {
       ...namesOf(out.preset).filter((name) => name !== 'default'),
       LEGACY_MULTI_PRESET,
     ]);
-    if (out.params[LEGACY_REPLICA_PARAM] === undefined) {
+    // A typed --replicas wins, as it does in `resolveReplicas`: the record's own count, carried
+    // back as a param, made `up --force --replicas 4` rebuild a 3-instance workspace with 3.
+    if (out.params[LEGACY_REPLICA_PARAM] === undefined || Number(replicas || 0) > 0) {
       out.params[LEGACY_REPLICA_PARAM] = out.replicas;
     }
   }

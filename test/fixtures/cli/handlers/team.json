@@ -21,7 +21,7 @@
     },
     "down --volumes --json without --yes": {
       "code": 2,
-      "stdout": "{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"VALIDATION_FAILED\", \"message\": \"--volumes deletes the data volume and the record, and --json has nobody to prompt. Add --yes to confirm it in the command.\"}, \"generated_at\": \"<t>\", \"houston_version\": \"2.1.6\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n",
+      "stdout": "{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"VALIDATION_FAILED\", \"message\": \"--volumes deletes the data volume and the record, and --json has nobody to prompt. Add --yes to confirm it in the command.\"}, \"generated_at\": \"<t>\", \"houston_version\": \"2.1.7\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n",
       "stderr": "error: --volumes deletes the data volume and the record, and --json has nobody to prompt. Add --yes to confirm it in the command.\n"
     },
     "down, keeping the data": {

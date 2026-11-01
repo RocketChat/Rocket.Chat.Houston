@@ -153,7 +153,22 @@ const ROOT = path.resolve(__dirname, '..');
 // directory a pinned, maintained OpenLDAP 2.6 in place of osixia/openldap:1.5.0. A changed
 // acme.challenge reaching a running edge from `up --domain`, with the staging its request asks
 // for.
-const FLOOR = 4760;
+// Side ports allocated per workspace: every preset built on shifted ports, over HTTPS too; the
+// allocator, preferred first and never another's preferred or voice's; concurrent creates and
+// attaches getting disjoint ports; a rebuild keeping them; Kubernetes labels and Grafana
+// forwards; the record's accessors; links, notes and the GUI's frame policy on a workspace's own
+// ports; and the source holding every builder and address to the ports it was handed.
+// Plus 3 from the live matrix: `up` on an existing workspace naming an ignored --port and
+// every other flag it does not apply, and `env`'s footer naming an unset key as removed rather
+// than among the overrides. Plus 6 from the independent review: a reuse's warning keeping
+// secrets out and naming only what was typed, a port its own container still holds kept, a
+// lost moved port back to its preferred number, a recorded port that is not the slot's not
+// kept, a typed --replicas winning on a rebuild, and no GUI reload for a known Grafana. Plus 1
+// from verifying the gaps live: a Kubernetes re-up with another LDAP seed rolls the directory.
+// Plus 4 from the last review: Docker's grouped port ranges read, a typed --set instances
+// beating the carried count, AD and generated directories left unstamped, and the typed --set
+// copy proven to reach the reuse through a whole create.
+const FLOOR = 4812;
 
 /** Every authored construct that removes a test from a run or inverts what it asserts. */
 const SKIP_CONSTRUCTS = [

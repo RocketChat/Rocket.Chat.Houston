@@ -6,6 +6,8 @@
  * supported deployment type needs. There is deliberately no plugin loading and no public CLI
  * surface here.
  */
+import type { PortMap } from '../config';
+
 import type { Params } from './registry';
 import type { Preset } from './types';
 
@@ -15,7 +17,7 @@ export interface ScenarioSpec<Intent> {
   /** Earlier spellings of `paramsHelp` keys, old → now (2.1.3's `sip` for `sip_integration`). */
   readonly paramAliases?: Readonly<Record<string, string>>;
   readonly resolveIntent: (params: Params) => Intent;
-  readonly adapters: Readonly<Record<string, (intent: Intent) => Preset>>;
+  readonly adapters: Readonly<Record<string, (intent: Intent, ports: PortMap) => Preset>>;
 }
 
 /**
@@ -41,7 +43,7 @@ export class Scenario<Intent = unknown> {
   readonly paramsHelp: Readonly<Record<string, string>>;
   readonly paramAliases: Readonly<Record<string, string>>;
   readonly resolveIntent: (params: Params) => Intent;
-  readonly adapters: Readonly<Record<string, (intent: Intent) => Preset>>;
+  readonly adapters: Readonly<Record<string, (intent: Intent, ports: PortMap) => Preset>>;
 
   constructor(spec: ScenarioSpec<Intent>) {
     this.name = spec.name;
@@ -51,7 +53,8 @@ export class Scenario<Intent = unknown> {
     this.adapters = spec.adapters;
   }
 
-  resolve(params: Params | null | undefined, deploymentType: string): Preset {
+  /** `ports`: the workspace's side ports, sparse; `{}` is every preferred one. */
+  resolve(params: Params | null | undefined, deploymentType: string, ports: PortMap = {}): Preset {
     const given = canonicalParams(params ?? {}, this.paramAliases);
     const known = new Set(Object.keys(this.paramsHelp));
     const unknown = Object.keys(given)
@@ -72,6 +75,6 @@ export class Scenario<Intent = unknown> {
           `'${deploymentType}'; supported: ${supported}`,
       );
     }
-    return { ...adapter(this.resolveIntent(given)), paramAliases: { ...this.paramAliases } };
+    return { ...adapter(this.resolveIntent(given), ports), paramAliases: { ...this.paramAliases } };
   }
 }

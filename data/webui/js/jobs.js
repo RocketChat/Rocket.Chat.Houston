@@ -229,17 +229,21 @@ function finishJob(job, failed, data) {
     if (JOB === job) ctx.$("#job-stop").hidden = true;
   }
   if (!failed && job.onResult && data.result) job.onResult(data.result);
-  if (!failed) reloadForPublicGrafana(data.result, false, job);
+  if (!failed) reloadForNewGrafana(data.result, false, job);
   ctx.loadRepros().then(ctx.refreshDetail);
 }
 
 // A document's frame-src policy is fixed at page load. Reload after a successful
-// public monitoring attachment, once the reader has closed its result, so the
-// server can allow that workspace's Grafana origin for the k6 dashboard.
-function reloadForPublicGrafana(result, detached = false, job = null) {
+// monitoring attachment whose Grafana the page was not loaded allowing -- a public one, or
+// a loopback one on a port other than the preferred 5050, which a second monitored
+// workspace gets -- once the reader has closed its result, so the server can allow that
+// workspace's Grafana origin for the k6 dashboard. One the page already allowed reloads
+// nothing: every job on a monitored workspace carries its Grafana.
+function reloadForNewGrafana(result, detached = false, job = null) {
   if (!result || !result.monitoring) return;
   const url = result && (result.grafana_url || (result.monitoring && result.monitoring.grafana_url));
-  if (!url || !url.startsWith("https://")) return;
+  if (!url || url === "http://localhost:5050" || url.startsWith("http://localhost:5050/")) return;
+  if (ctx.GRAFANAS_AT_LOAD && ctx.GRAFANAS_AT_LOAD.has(ctx.originOf(url))) return;
   if (detached) { location.reload(); return; }
   logLine({ level: "info", message: "Close this result to reload the GUI and enable the public Grafana dashboard." });
   ((job && job.view && job.view.dialog) || ctx.$("#job-dialog")).addEventListener("close", () => location.reload(), { once: true });
@@ -324,7 +328,7 @@ async function watchDetachedJob(job) {
     ctx.toast(stopped ? `${job.title}: ${state.error || "stopped"}`
       : state.status === "error" ? `${job.title} failed: ${state.error || ""}` : `${job.title} finished`,
     stopped ? "info" : state.status === "error" ? "error" : "ok");
-    if (state.status !== "error") reloadForPublicGrafana(state.result, true);
+    if (state.status !== "error") reloadForNewGrafana(state.result, true);
     ctx.loadRepros().then(ctx.refreshDetail);
     return state;
   }

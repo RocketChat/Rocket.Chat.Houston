@@ -41,6 +41,18 @@ const strip = (event: Seen): Seen => ({
   data: event.data,
 });
 
+/**
+ * `lifecycle/ports` as a machine where monitoring's preferred ports are free: each slot gets
+ * its preferred port, and the port lock just runs what it guards.
+ */
+function preferredMonitorPorts() {
+  return {
+    claimMonitorPorts: async (_name: string, slots: readonly string[]) =>
+      slots.map((slot) => (slot === 'prometheus' ? 9090 : 5050)),
+    withPortPublication: async <T>(publish: () => Promise<T>): Promise<T> => await publish(),
+  };
+}
+
 describe('reading the host bind out of an existing workspace', () => {
   it('answers what earlier releases answered on every document shape', () => {
     const docs = [
@@ -89,9 +101,7 @@ describe('a hand-edited compose file or record, attached and detached on Compose
         versionSource: 'map',
         extra: structuredClone(extra),
       };
-      jest.doMock('../../src/core/lifecycle/ports', () => ({
-        checkMonitorPorts: async () => undefined,
-      }));
+      jest.doMock('../../src/core/lifecycle/ports', () => preferredMonitorPorts());
       jest.doMock('../../src/core/lifecycle/admin', () => ({
         login: async () => ({ token: 't', userId: 'u' }),
       }));
@@ -221,9 +231,7 @@ describe('attaching monitoring on Compose', () => {
     jest.doMock('../../src/core/lifecycle/preconditions', () => ({
       requireDocker: async () => undefined,
     }));
-    jest.doMock('../../src/core/lifecycle/ports', () => ({
-      checkMonitorPorts: async () => undefined,
-    }));
+    jest.doMock('../../src/core/lifecycle/ports', () => preferredMonitorPorts());
     jest.doMock('../../src/core/lifecycle/admin', () => ({
       login: async () => ({ token: 't', userId: 'u' }),
     }));
@@ -316,9 +324,7 @@ describe('detaching monitoring on Compose', () => {
     jest.doMock('../../src/core/lifecycle/preconditions', () => ({
       requireDocker: async () => undefined,
     }));
-    jest.doMock('../../src/core/lifecycle/ports', () => ({
-      checkMonitorPorts: async () => undefined,
-    }));
+    jest.doMock('../../src/core/lifecycle/ports', () => preferredMonitorPorts());
     jest.doMock('../../src/core/lifecycle/admin', () => ({
       login: async () => {
         throw new Error('down');
@@ -524,9 +530,7 @@ describe('attaching monitoring on Kubernetes', () => {
     jest.doMock('../../src/core/lifecycle/admin', () => ({
       login: async () => ({ token: 't', userId: 'u' }),
     }));
-    jest.doMock('../../src/core/lifecycle/ports', () => ({
-      checkMonitorPorts: async () => undefined,
-    }));
+    jest.doMock('../../src/core/lifecycle/ports', () => preferredMonitorPorts());
     jest.doMock('../../src/core/topology', () => ({
       ...jest.requireActual('../../src/core/topology'),
       ofRepro: async () => 'kubernetes',
@@ -616,6 +620,150 @@ describe('attaching monitoring on Kubernetes', () => {
       phase: 'done',
       data: { data: { grafana_url: 'http://localhost:5050/grafana' } },
     });
+  });
+});
+
+describe('monitoring on a machine where another workspace already has it', () => {
+  // Real records, real locks, the real allocator: only Docker, Rocket.Chat and the cluster are
+  // stood in for. One monitored workspace per machine was the rule; a second is given the next
+  // free pair, and two attaches at once cannot be given the same one.
+  const MOCKED = [
+    'lifecycle/naming',
+    'lifecycle/preconditions',
+    'lifecycle/admin',
+    'topology',
+    'runner/engine',
+    'runner/ports',
+    'rcapi',
+    'kube/monitoring',
+    'kube/forward',
+    'kube/names',
+    'kube/namespace',
+  ];
+  afterEach(() => {
+    for (const module of MOCKED) jest.dontMock(`../../src/core/${module}`);
+    jest.resetModules();
+  });
+
+  function harness(runtime: string, login: () => Promise<unknown> = async () => ({})) {
+    jest.resetModules();
+    fs.rmSync((require('../../src/lib/config') as { reprosDir: () => string }).reprosDir(), {
+      recursive: true,
+      force: true,
+    });
+    jest.dontMock('../../src/core/runner/locks');
+    jest.dontMock('../../src/core/runner/record');
+    jest.dontMock('../../src/core/lifecycle/ports');
+    const forwards: number[] = [];
+    jest.doMock('../../src/core/lifecycle/naming', () => ({
+      resolveName: async (n: string) => n,
+    }));
+    jest.doMock('../../src/core/lifecycle/preconditions', () => ({
+      requireDocker: async () => undefined,
+    }));
+    jest.doMock('../../src/core/lifecycle/admin', () => ({ login }));
+    jest.doMock('../../src/core/topology', () => ({
+      ...jest.requireActual('../../src/core/topology'),
+      ofRepro: async () => runtime,
+    }));
+    jest.doMock('../../src/core/runner/engine', () => ({
+      ...jest.requireActual('../../src/core/runner/engine'),
+      up: async () => 0,
+    }));
+    jest.doMock('../../src/core/runner/ports', () => ({
+      ...jest.requireActual('../../src/core/runner/ports'),
+      portFree: async () => true,
+    }));
+    jest.doMock('../../src/core/rcapi', () => ({
+      ...jest.requireActual('../../src/core/rcapi'),
+      setSetting: async () => true,
+    }));
+    jest.doMock('../../src/core/kube/monitoring', () => ({
+      MONITORING_NAMESPACE: 'monitoring',
+      ensureMonitoring: async () => undefined,
+      setMonitoringLabel: async () => undefined,
+      ensurePodMonitor: async () => undefined,
+    }));
+    jest.doMock('../../src/core/kube/forward', () => ({
+      grafanaForward: async (options: { hostPort: number }) => {
+        forwards.push(options.hostPort);
+        return 4321;
+      },
+      forwardReachable: async () => true,
+    }));
+    jest.doMock('../../src/core/kube/names', () => ({ CONTEXT: 'kind-houston-local' }));
+    jest.doMock('../../src/core/kube/namespace', () => ({
+      namespaceFor: async (n: string) => `houston-${n}`,
+      requireOwnNamespace: async () => undefined,
+    }));
+    const record = require('../../src/core/runner/record') as typeof RecordNS;
+    const monitor = require('../../src/core/monitor') as typeof MonitorNS;
+    const workspace = async (name: string, hostPort: number, extra: Record<string, unknown>) =>
+      await record.write(
+        name,
+        `services:\n  rocketchat:\n    ports: ['127.0.0.1:${String(hostPort)}:3000']\n`,
+        record.metadata({
+          name,
+          project: `houston-${name}`,
+          rootUrl: `http://localhost:${String(hostPort)}`,
+          hostPort,
+          extra: { runtime, ...extra },
+        }),
+      );
+    return { record, monitor, workspace, forwards };
+  }
+
+  it('gives a second Compose workspace the next free pair, and builds its stack and notes on it', async () => {
+    const { record, monitor, workspace } = harness('docker');
+    await workspace('first', 3401, { monitoring: true, monitoring_ports: [9090, 5050] });
+    await workspace('second', 3402, {});
+    const result = await monitor.attach('second');
+    expect(result['grafana_url']).toBe('http://localhost:5051');
+    const meta = await record.readMeta('second');
+    expect(meta.extra.monitoring_ports).toEqual([9091, 5051]);
+    expect(String((meta.extra.notes as string[]).join('\n'))).toContain('http://localhost:9091');
+    const doc = JSON.stringify(await record.readCompose('second'));
+    expect(doc).toContain('127.0.0.1:9091:9090');
+    expect(doc).toContain('127.0.0.1:5051:3000');
+  });
+
+  it('gives two attaches at once two different pairs', async () => {
+    // Both get past the login before either chooses: the choice and the record holding it are
+    // one step under the port lock, so the second sees the first's claim.
+    let arrived = 0;
+    let release!: () => void;
+    const both = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { record, monitor, workspace } = harness('docker', async () => {
+      arrived += 1;
+      if (arrived === 2) release();
+      await both;
+      return {};
+    });
+    await workspace('a', 3403, {});
+    await workspace('b', 3404, {});
+    await Promise.all([monitor.attach('a'), monitor.attach('b')]);
+    const pairs = await Promise.all(['a', 'b'].map(async (n) => (await record.readMeta(n)).extra));
+    expect(pairs.map((extra) => extra.monitoring_ports).sort()).toEqual([
+      [9090, 5050],
+      [9091, 5051],
+    ]);
+  });
+
+  it("keeps a Kubernetes workspace's own Grafana forward port, while another holds the preferred one", async () => {
+    const { record, monitor, workspace, forwards } = harness('kubernetes');
+    await workspace('held', 3405, { monitoring: true, monitoring_ports: [5050] });
+    await workspace('w', 3406, {
+      namespace: 'houston-w',
+      context: 'kind-houston-local',
+      monitoring: true,
+      monitoring_ports: [5051],
+    });
+    const result = await monitor.attach('w');
+    expect(forwards).toEqual([5051]);
+    expect(result['grafana_url']).toBe('http://localhost:5051/grafana');
+    expect((await record.readMeta('w')).extra.monitoring_ports).toEqual([5051]);
   });
 });
 
@@ -898,13 +1046,16 @@ describe('Grafana public URL regression: attach and detach', () => {
     };
     const registered = jest.fn(async () => false);
     const cleanup = jest.fn(async () => undefined);
-    const ports = jest.fn(async () => undefined);
+    const ports = jest.fn(preferredMonitorPorts().claimMonitorPorts);
     const forward = jest.fn(async () => 1);
     let manifest: Record<string, unknown> | undefined;
     jest.doMock('../../src/core/lifecycle/naming', () => ({
       resolveName: async (name: string) => name,
     }));
-    jest.doMock('../../src/core/lifecycle/ports', () => ({ checkMonitorPorts: ports }));
+    jest.doMock('../../src/core/lifecycle/ports', () => ({
+      ...preferredMonitorPorts(),
+      claimMonitorPorts: ports,
+    }));
     jest.doMock('../../src/core/lifecycle/admin', () => ({
       login: async () => ({ token: 't', userId: 'u' }),
     }));

@@ -21,7 +21,7 @@ export async function usedPorts(): Promise<Set<number>> {
       for (let offset = 1; offset <= instances; offset += 1) ports.add(meta.hostPort + offset);
     }
     // Preset side services (Keycloak/Mailpit/MinIO…) and the monitoring add-on
-    // (Prometheus/Grafana) publish fixed host ports recorded at `up` — claimed too, so
+    // (Prometheus/Grafana) publish host ports recorded at `up` — claimed too, so
     // RC port allocation avoids them.
     for (const key of ['sidecar_ports', 'monitoring_ports', 'tls_ports']) {
       const claimed = meta.extra[key];

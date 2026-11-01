@@ -85,10 +85,10 @@
     "say": ["licen[cs]e"]
   },
   {
-    "id": "same-preset-busy",
+    "id": "same-preset-twice",
     "request": "My workspace issue-88231 (7.4.1 with --preset ldap) is running and I'm using it. Also boot pull request 42878's build with LDAP so I can compare the two.",
     "never_run": ["houston (down|stop)\\b[^\\n]*issue-88231"],
-    "ask": ["issue-88231|one at a time|8082|port"]
+    "run": ["houston up\\b[^\\n]*--preset ldap\\b"]
   },
   {
     "id": "stale-skill-copy",

@@ -23,6 +23,7 @@ import type * as TlsplanNS from '../../../src/core/lifecycle/tlsplan';
 import type * as RoutesNS from '../../../src/core/edge/routes';
 
 import * as config from '../../../src/lib/config';
+import { safeLoadAll } from '../../../src/lib/presets/common';
 import { ConflictError, PreflightError, ValidationError } from '../../../src/lib/errors';
 import { NOTHING_LEFT, nullEmit } from '../../../src/lib/events';
 import type { KubectlResult } from '../../../src/seams/kubectl';
@@ -158,6 +159,8 @@ jest.mock('../../../src/core/lifecycle/seeding', () => ({
   },
 }));
 
+type Bag = Record<string, unknown>;
+
 const realRun = kube.run;
 
 /** A cluster that exists, is not ours to build, and answers. */
@@ -263,16 +266,26 @@ describe('a Kubernetes create', () => {
     expect(extra.runtime).toBe('kubernetes');
   });
 
-  it('refuses a second workspace that wants the same side port, naming the holder', async () => {
+  it('forwards a second workspace with the same preset on the next free port, and keeps it on a re-up', async () => {
     const req = (name: string) =>
       createReq({ version: '8.5.1', name, preset: 'ldap', runtime: 'kubernetes', offline: true });
+    /** The host port the forwarder reads off phpLDAPadmin's Service. */
+    const label = (options: Record<string, unknown> | undefined): unknown =>
+      (options?.preset as { kubernetesManifests: string[] }).kubernetesManifests
+        .flatMap((manifest) => safeLoadAll(manifest) as Record<string, unknown>[])
+        .map((doc) => doc as { kind?: string; metadata?: { name?: string; labels?: Bag } })
+        .find((doc) => doc.kind === 'Service' && doc.metadata?.name === 'phpldapadmin')?.metadata
+        ?.labels?.['houston.io/ui-port'];
     await createKubernetes(req('kldap-one'));
-    const refusal = createKubernetes(req('kldap-two'));
-    await expect(refusal).rejects.toBeInstanceOf(ConflictError);
-    await expect(createKubernetes(req('kldap-two'))).rejects.toThrow(/kldap-one/u);
-    expect(await exists('kldap-two')).toBe(false);
-    // Its own re-up is not a second claim.
-    await createKubernetes(req('kldap-one'));
+    await createKubernetes(req('kldap-two'));
+    expect([label(mockCreated[0]), label(mockCreated[1])]).toEqual(['8082', '8083']);
+    const two = (await readMeta('kldap-two')).extra;
+    expect([two.sidecar_ports, two.side_ports]).toEqual([[8083], { ldap: [8083] }]);
+    expect((await readMeta('kldap-one')).extra).not.toHaveProperty('side_ports');
+    // Its re-up renders the same label from its record: the forward, and every link, holds.
+    await createKubernetes(req('kldap-two'));
+    expect(label(mockCreated[2])).toBe('8083');
+    expect((await readMeta('kldap-two')).extra.side_ports).toEqual({ ldap: [8083] });
   });
 
   it('refuses a --set the preset does not take, as Compose does', async () => {

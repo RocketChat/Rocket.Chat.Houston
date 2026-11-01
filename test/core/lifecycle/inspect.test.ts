@@ -9,6 +9,7 @@ import * as topology from '../../../src/core/topology';
 
 import {
   degradedReason,
+  grafanaFrameOrigins,
   reproLinks,
   reproState,
   rowFor,
@@ -415,6 +416,61 @@ describe('the links a workspace publishes', () => {
       expect((await summary(meta)).grafana_url).toBe('http://localhost:5050');
     }
   });
+  it("links a second workspace's own side services and monitoring, never the preferred ports", async () => {
+    // A link built from the registry opens SOMEONE ELSE's Mailpit, Keycloak or Grafana.
+    const byLabel = (meta: Metadata) =>
+      Object.fromEntries(reproLinks(meta).map((link) => [link.label, link.url]));
+    const moved = linksMeta('email+ldap', {
+      runtime: 'docker',
+      preset_params: { ldap: { idp: 'saml' } },
+      side_ports: { email: [8026], ldap: [8083], saml: [8084] },
+      monitoring: true,
+      monitoring_ports: [9091, 5051],
+    });
+    expect(byLabel(moved)).toMatchObject({
+      Mailpit: 'http://localhost:8026',
+      phpLDAPadmin: 'http://localhost:8083',
+      Keycloak: 'http://localhost:8084',
+      Grafana: 'http://localhost:5051',
+      Prometheus: 'http://localhost:9091',
+    });
+    // A record written before ports could move keeps answering what it runs.
+    const older = linksMeta('email+ldap', {
+      runtime: 'docker',
+      preset_params: { ldap: { idp: 'saml' } },
+      monitoring: true,
+    });
+    expect(byLabel(older)).toMatchObject({
+      Mailpit: 'http://localhost:8025',
+      phpLDAPadmin: 'http://localhost:8082',
+      Keycloak: 'http://localhost:8081',
+      Grafana: 'http://localhost:5050',
+      Prometheus: 'http://localhost:9090',
+    });
+    expect((await summary(moved)).grafana_url).toBe('http://localhost:5051');
+  });
+
+  it("lets the GUI frame each monitored workspace's own Grafana", async () => {
+    // The k6 dashboard is an iframe; a page allowing only localhost:5050 refused a second
+    // monitored workspace's Grafana.
+    await write(
+      'watched',
+      'services: {}\n',
+      metadata({ ...linksMeta('default'), name: 'watched', extra: { monitoring: true } }),
+    );
+    await write(
+      'second',
+      'services: {}\n',
+      metadata({
+        ...linksMeta('default'),
+        name: 'second',
+        extra: { monitoring: true, monitoring_ports: [9091, 5051] },
+      }),
+    );
+    expect(await grafanaFrameOrigins()).toEqual(['http://localhost:5050', 'http://localhost:5051']);
+    for (const name of ['watched', 'second']) fs.rmSync(workspace(name), { recursive: true });
+  });
+
   it("surfaces each scenario's own UI, the monitoring pair and every instance", () => {
     const byLabel = (meta: Metadata) =>
       Object.fromEntries(reproLinks(meta).map((link) => [link.label, link.url]));

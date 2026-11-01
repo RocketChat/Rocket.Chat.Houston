@@ -74,11 +74,20 @@ export function generateAdminPassword(): string {
 }
 
 /**
- * Host ports published by preset side services. ONE registry, so presets cannot
- * silently collide with each other -- a new preset picks a port by looking here. RC's
- * own port is allocated dynamically per repro; these are fixed.
+ * Host ports by preset and position: the registry's own, or one workspace's.
+ *
+ * SPARSE where it is one workspace's: a preset it does not name publishes its registry ports
+ * (`presets/common.ts` `presetPorts` is the one reader that falls back).
  */
-export const PRESET_PORTS: Readonly<Record<string, readonly number[]>> = Object.freeze({
+export type PortMap = Readonly<Record<string, readonly number[]>>;
+
+/**
+ * The PREFERRED host ports of preset side services. ONE registry, so presets cannot
+ * silently collide with each other -- a new preset picks a port by looking here. The first
+ * workspace on a machine gets these; another with the same preset gets the next free port,
+ * recorded in its own record and kept from then on (`core/lifecycle/ports.ts`).
+ */
+export const PRESET_PORTS: PortMap = Object.freeze({
   saml: Object.freeze([8081]), // Keycloak (SAML)
   oidc: Object.freeze([8085]), // Keycloak (OIDC; same port inside+out)
   email: Object.freeze([8025]), // Mailpit web UI / API
@@ -88,8 +97,9 @@ export const PRESET_PORTS: Readonly<Record<string, readonly number[]>> = Object.
 });
 
 /**
- * Host ports for the --monitor add-on (Prometheus, Grafana). Not a preset, so kept
- * separate from PRESET_PORTS but treated the same for collision checks.
+ * The PREFERRED host ports of the --monitor add-on (Prometheus, Grafana). Not a preset, so
+ * kept separate from PRESET_PORTS but allocated the same way: the first monitored workspace
+ * gets these, another the next free ones (`extra.monitoring_ports` records which).
  */
 export const MONITOR_PORTS: readonly [number, number] = Object.freeze([9090, 5050]);
 

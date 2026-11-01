@@ -18,15 +18,11 @@
  * `user1`. The local admin (admin/admin123) still works via LDAP_Login_Fallback, so
  * houston's own API/token calls keep functioning.
  */
-import {
-  EMAIL_2FA,
-  choiceParam,
-  intParam,
-  presetPort,
-  presetPorts,
-  safeDump,
-  strParam,
-} from './common';
+import { createHash } from 'node:crypto';
+
+import type { PortMap } from '../config';
+
+import { EMAIL_2FA, choiceParam, intParam, presetPort, safeDump, strParam } from './common';
 import { guide, type PresetGuide } from './guides';
 import * as keycloak from './keycloak';
 import { type Params, register, registerScenario } from './registry';
@@ -34,12 +30,14 @@ import { Scenario } from './scenario';
 import { emptyPreset, type Preset } from './types';
 
 /**
- * phpLDAPadmin's host port, from the ONE registry both runtimes read. Compose publishes it
- * directly; Kubernetes declares it on the Service (see `UI_PORT_LABEL`) and the lifecycle
- * forwards it. Same number either way, so a ticket's instructions do not depend on where
- * the workspace happens to run.
+ * phpLDAPadmin's host port in this workspace (`ports` over the ONE registry both runtimes
+ * read). Compose publishes it directly; Kubernetes declares it on the Service (see
+ * `UI_PORT_LABEL`) and the lifecycle forwards it. Same number either way, so a ticket's
+ * instructions do not depend on where the workspace happens to run.
  */
-const UI_PORT = presetPort('ldap');
+function uiPortOf(ports: PortMap): number {
+  return presetPort('ldap', 0, ports);
+}
 
 /**
  * phpLDAPadmin 2, the maintained line (amd64/arm64). osixia/phpldapadmin:0.9.0 shipped 1.2.5
@@ -401,9 +399,10 @@ interface IdpParts {
   readonly notes: string[];
 }
 
-function idpParts(it: LDAPIntent): IdpParts | null {
+/** `ports`: the workspace's, so ldap's own Keycloak takes the saml or oidc port it was given. */
+function idpParts(it: LDAPIntent, ports: PortMap): IdpParts | null {
   if (it.idp === 'none') return null;
-  const port = presetPort(it.idp);
+  const port = presetPort(it.idp, 0, ports);
   const host = `http://${it.idpHost}:${String(port)}`;
   const realmBase = `${host}/realms/${keycloak.REALM}`;
   const saml = it.idp === 'saml';
@@ -882,11 +881,11 @@ function directoryDescription(it: LDAPIntent): string {
   );
 }
 
-function adNotes(it: LDAPIntent): string[] {
+function adNotes(it: LDAPIntent, uiPort: number): string[] {
   return [
     // One string per point (see the SSO notes): the place with its login in parentheses, as
     // the GUI's link rows read it, then prose.
-    `phpLDAPadmin: http://localhost:${String(UI_PORT)}  (log in with DN CN=Administrator,CN=Users,${it.baseDn} / ${AD_ADMIN_PASSWORD})`,
+    `phpLDAPadmin: http://localhost:${String(uiPort)}  (log in with DN CN=Administrator,CN=Users,${it.baseDn} / ${AD_ADMIN_PASSWORD})`,
     `Rocket.Chat users are user1..user${String(it.users)} (sAMAccountName, or UPN userN@${it.domain}), password same as name; Rocket.Chat keys them by objectGUID.`,
     ...(it.users > SHIPPED_USERS_MAX
       ? ['A large directory takes a while to seed: about 5 minutes for 20,000 users.']
@@ -976,10 +975,10 @@ function guideFor(it: LDAPIntent): PresetGuide {
   });
 }
 
-function notesFor(it: LDAPIntent): string[] {
-  if (isAd(it)) return adNotes(it);
+function notesFor(it: LDAPIntent, uiPort: number): string[] {
+  if (isAd(it)) return adNotes(it, uiPort);
   return [
-    `phpLDAPadmin: http://localhost:${String(UI_PORT)}  (log in with DN cn=admin,${it.baseDn} / ${it.adminPassword})`,
+    `phpLDAPadmin: http://localhost:${String(uiPort)}  (log in with DN cn=admin,${it.baseDn} / ${it.adminPassword})`,
     `Rocket.Chat users are user1..user${String(it.users)}, password same as name.`,
     ...(it.groups
       ? [
@@ -1011,9 +1010,10 @@ function openldapService(it: LDAPIntent): Record<string, unknown> {
       };
 }
 
-function composeAdapter(it: LDAPIntent): Preset {
+function composeAdapter(it: LDAPIntent, ports: PortMap): Preset {
   const host = hostOf(it);
-  const idp = idpParts(it);
+  const uiPort = uiPortOf(ports);
+  const idp = idpParts(it, ports);
   const services: Record<string, Record<string, unknown>> = {
     [host]: isAd(it) ? adService(it) : openldapService(it),
     // A directory you cannot look at is hard to reproduce against: "is the user there,
@@ -1024,7 +1024,7 @@ function composeAdapter(it: LDAPIntent): Preset {
     phpldapadmin: {
       image: UI_IMAGE,
       environment: uiEnv(it),
-      ports: [`${String(UI_PORT)}:${String(UI_CONTAINER_PORT)}`],
+      ports: [`${String(uiPort)}:${String(UI_CONTAINER_PORT)}`],
       depends_on: [host],
       restart: 'unless-stopped',
     },
@@ -1054,8 +1054,8 @@ function composeAdapter(it: LDAPIntent): Preset {
     // Declared so port allocation and the capacity preflight can SEE it --
     // the invariant that holds each preset's ports to the registry caught this being
     // missing the moment phpLDAPadmin gained a port.
-    ports: [...presetPorts('ldap'), ...(idp === null ? [] : [idp.port])],
-    notes: [...notesFor(it), ...(idp?.notes ?? [])],
+    ports: [uiPort, ...(idp === null ? [] : [idp.port])],
+    notes: [...notesFor(it, uiPort), ...(idp?.notes ?? [])],
     guides: [guideFor(it)],
     postReady: idp?.postReady ?? [],
     paramsHelp: { ...PARAMS_HELP },
@@ -1072,15 +1072,19 @@ function directoryFiles(it: LDAPIntent): [string, string][] {
 }
 
 /** The phpLDAPadmin browser UI, which is the only way to see what LDAP holds. */
-function phpldapadminWorkload(labels: Record<string, string>, it: LDAPIntent): [Bag, Bag] {
+function phpldapadminWorkload(
+  labels: Record<string, string>,
+  it: LDAPIntent,
+  uiPort: number,
+): [Bag, Bag] {
   // phpLDAPadmin, and the label that gets it published. A Service carrying
   // `houston.io/ui-port` is forwarded to that host port by the Kubernetes lifecycle -- the
   // declaration lives on the Service that defines the thing, rather than in a second
-  // registry the adapter would have to be kept in step with. The NUMBER still comes from
-  // `config.PRESET_PORTS`, so both runtimes publish the same one.
+  // registry the adapter would have to be kept in step with. The NUMBER is the workspace's
+  // ldap port, so both runtimes publish the same one.
   const uiLabels: Record<string, string> = { ...labels };
   uiLabels.app = 'houston-phpldapadmin';
-  uiLabels[UI_PORT_LABEL] = String(UI_PORT);
+  uiLabels[UI_PORT_LABEL] = String(uiPort);
   const uiDeployment: Bag = {
     apiVersion: 'apps/v1',
     kind: 'Deployment',
@@ -1265,8 +1269,15 @@ function adWorkload(it: LDAPIntent, labels: Record<string, string>): [Bag, Bag] 
   return [deployment, service];
 }
 
+/** The seed ConfigMap's data: the directory files under their own names. */
+function seedData(it: LDAPIntent): Record<string, string> {
+  return Object.fromEntries(
+    directoryFiles(it).map(([file, text]) => [file.slice('ldap/'.length), text]),
+  );
+}
+
 /** Render the small directory workload used by the Kubernetes adapter. */
-function kubernetesManifest(it: LDAPIntent): string {
+function kubernetesManifest(it: LDAPIntent, uiPort: number): string {
   const labels: Record<string, string> = {
     app: isAd(it) ? `houston-${AD_HOST}` : 'houston-openldap',
     'app.kubernetes.io/managed-by': 'houston',
@@ -1278,36 +1289,49 @@ function kubernetesManifest(it: LDAPIntent): string {
     apiVersion: 'v1',
     kind: 'ConfigMap',
     metadata: { name: isAd(it) ? `${AD_HOST}-seed` : 'openldap-bootstrap', labels },
-    data: Object.fromEntries(
-      directoryFiles(it).map(([file, text]) => [file.slice('ldap/'.length), text]),
-    ),
+    data: seedData(it),
   };
   const [deployment, service] = isAd(it) ? adWorkload(it, labels) : openldapWorkload(it, labels);
-  const [uiDeployment, uiService] = phpldapadminWorkload(labels, it);
+  // A CHANGED SEED ROLLS THE DIRECTORY. slapd keeps its entries in the pod and reads the seed
+  // once; a ConfigMap edit restarts nothing, so a re-up with `--set users=9` recorded 9 and
+  // kept serving 5 (live 2026-10-31). Stamped only off the default seed: a default workspace,
+  // and the manifests earlier releases pin, are unchanged, and a re-up of either rolls nothing.
+  // Only an LDIF seed: AD's and the generator's are fixed scripts whose counts ride in the env,
+  // which rolls the pod already -- a stamp there would only roll a 2.1.6 workspace once, and
+  // a re-provisioned AD gives every user a new objectGUID, which Rocket.Chat matches them by.
+  const seed = JSON.stringify(configMap.data);
+  if (!isAd(it) && !generated(it) && seed !== JSON.stringify(seedData(intent({})))) {
+    const template = (deployment.spec as Bag).template as Bag;
+    template.metadata = {
+      ...(template.metadata as Bag),
+      annotations: {
+        'houston.io/seed': createHash('sha256').update(seed).digest('hex').slice(0, 16),
+      },
+    };
+  }
+  const [uiDeployment, uiService] = phpldapadminWorkload(labels, it, uiPort);
   return [configMap, deployment, service, uiDeployment, uiService]
     .map((doc) => safeDump(doc))
     .join('---\n');
 }
 
-function kubernetesAdapter(it: LDAPIntent): Preset {
-  const idp = idpParts(it);
+function kubernetesAdapter(it: LDAPIntent, ports: PortMap): Preset {
+  const uiPort = uiPortOf(ports);
+  const idp = idpParts(it, ports);
   return {
     ...emptyPreset('ldap'),
     description: describe(it),
-    notes: [...notesFor(it), ...(idp?.notes ?? [])],
+    notes: [...notesFor(it, uiPort), ...(idp?.notes ?? [])],
     guides: [guideFor(it)],
     postReady: idp?.postReady ?? [],
     topology: 'kubernetes',
     // Declared here for the same reason the Compose adapter declares it: phpLDAPadmin is
-    // published on the FIXED host port 8082 on this runtime too (as a port-forward rather
-    // than a compose mapping). The Kubernetes create's `claimSidecarPorts` refuses a second
-    // workspace that wants it and names the holder, as Compose does, and records it as
-    // `sidecar_ports`. Until that step existed this list was read by nothing here, and a
-    // second workspace's forward simply failed to bind 8082.
-    //
-    // The ports invariant resolves presets through `presets.load`, the DOCKER adapter, so
-    // it does not see this list.
-    ports: [...presetPorts('ldap'), ...(idp === null ? [] : [idp.port])],
+    // published on the workspace's host port on this runtime too (as a port-forward rather
+    // than a compose mapping). The Kubernetes create allocates it as Compose does
+    // (`lifecycle/ports.ts` `claimSidePorts`) and records it as `sidecar_ports`. Until that
+    // step existed this list was read by nothing here, and a second workspace's forward
+    // simply failed to bind 8082.
+    ports: [uiPort, ...(idp === null ? [] : [idp.port])],
     // The scenario changes the backing service and Rocket.Chat settings; it does not make
     // the microservices deployment cease to be an Enterprise topology. Preserve that
     // deployment-level requirement so lifecycle warnings and onboarding next-command
@@ -1321,7 +1345,7 @@ function kubernetesAdapter(it: LDAPIntent): Preset {
     scenarioParams: asParams(it),
     extra: certificateExtra(it),
     kubernetesManifests: [
-      kubernetesManifest(it),
+      kubernetesManifest(it, uiPort),
       ...(idp === null
         ? []
         : [keycloak.manifests(idp.realm, idp.port, it.idp === 'oidc' ? idp.port : undefined)]),
@@ -1343,8 +1367,8 @@ export function scenario(): Scenario<LDAPIntent> {
 }
 
 /** Legacy `ldap` loader entry point; resolve through the Compose adapter. */
-export function build(params: Params): Preset {
-  return SCENARIO.resolve(params, 'docker');
+export function build(params: Params, ports: PortMap): Preset {
+  return SCENARIO.resolve(params, 'docker', ports);
 }
 
 register('ldap', build);

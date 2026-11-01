@@ -30,6 +30,8 @@ import {
 } from '../../lib/monitoring';
 import { quotedText, toText } from '../../lib/format';
 import { joinPath } from '../../lib/home';
+import { redactEnv } from '../../lib/redact';
+import { presetPort } from '../../lib/presets/common';
 import * as presets from '../../lib/presets/index';
 import { compositeName, namesOf, presetsLabel, qualifiedParams } from '../../lib/presets/composite';
 import { directoryHost, withCertificate } from '../../lib/presets/ldap';
@@ -60,7 +62,14 @@ import * as portSeam from '../runner/ports';
 import * as record from '../runner/record';
 import { rcState, removeVolumes } from '../runner/queries';
 import * as topology from '../topology';
-import { MODE_LOCAL, acmeDir, budgetWarning, recordIssuance, rootUrl as tlsRootUrl } from '../tls';
+import {
+  MODE_LOCAL,
+  acmeDir,
+  budgetWarning,
+  normalizeDomain,
+  recordIssuance,
+  rootUrl as tlsRootUrl,
+} from '../tls';
 
 import type * as createK8s from './create-k8s';
 import { createKubernetes } from './create-k8s';
@@ -75,7 +84,7 @@ import * as seeding from './seeding';
 import * as sizing from './sizing';
 import * as tlsplan from './tlsplan';
 import { mongoKernelConflict } from '../../lib/mongo-kernel';
-import { type CreateReq, BROWSER_HOST_PARAM, LOOPBACK_BINDS } from './types';
+import { type CreateReq, BROWSER_HOST_PARAM, LOOPBACK_BINDS, PRESET_LINKS } from './types';
 import { type TlsSpec } from '../tls';
 import {
   clearKind,
@@ -117,15 +126,21 @@ export interface CreatePlan {
   /** `resolvePairing` */
   cfg: config.Config;
   resolved: Resolved | null;
-  /** `loadPreset` */
+  /** `loadPreset`, rebuilt by `claimPorts` on the side ports it was given */
   pre: Preset | null;
   /** A composed workspace's params, by preset; null for one preset, whose params are flat. */
   presetParams: Record<string, Record<string, unknown>> | null;
+  /** `--set` as the caller gave it, before the record's params or a derived host fill it in. */
+  typedParams: Record<string, unknown>;
   wait: boolean;
   /** `settleName` */
   reproName: string;
   /** `claimPorts` */
   hostPort: number;
+  /** The presets' moved side ports, sparse (`extra.side_ports`); `{}` when none moved. */
+  sidePorts: Record<string, number[]>;
+  /** `[prometheus, grafana]` when monitored (`extra.monitoring_ports`), else empty. */
+  monitorPorts: number[];
   root: string;
   token: string;
   bindHost: string;
@@ -155,9 +170,12 @@ export function createPlan(
     resolved: null,
     pre: null,
     presetParams: null,
+    typedParams: { ...values.req.params },
     wait: false,
     reproName: '',
     hostPort: 0,
+    sidePorts: {},
+    monitorPorts: [],
     root: '',
     token: '',
     bindHost: '',
@@ -343,6 +361,89 @@ export async function createRepro(
   });
 }
 
+/**
+ * The rest of what a reuse does not apply, each only when it was asked for and differs from the
+ * record, so re-running the command that made the workspace says nothing of these (the licence
+ * and registration token are never recorded, so `reuse` names them whenever given). All of these went
+ * unmentioned: `up --name existing --bind 0.0.0.0` (or --set, --root-url, --rc-image, --mongo,
+ * --https, --domain, --env) came back exactly as before and said it was fine (live 2026-10-30).
+ */
+function ignoredSettings(
+  req: CreateReq,
+  meta: record.Metadata,
+  resolved: Resolved | null,
+  presetName: string,
+  typed: Record<string, unknown>,
+): string[] {
+  const out: string[] = [];
+  const extra = bag(meta.extra);
+  const bound = String(extra.bind_host ?? '') || config.DEFAULT_BIND_HOST;
+  if (req.bind && req.bind !== bound) out.push(`bind address ${req.bind} (existing: ${bound})`);
+  const advertised = String(extra.advertised_url ?? '') || meta.publicUrl || meta.rootUrl;
+  if (req.rootUrl && req.rootUrl.replace(/\/$/u, '') !== advertised.replace(/\/$/u, '')) {
+    out.push(`root URL ${req.rootUrl} (existing: ${advertised})`);
+  }
+  // As compose names them: the record keeps the repository, and the tag is the release.
+  if (req.rcImage && resolved !== null) {
+    const image = compose.imageRef(resolved.rcImage, resolved.rcVersion);
+    const running = compose.imageRef(meta.rcImage, meta.rcVersion);
+    if (image !== running) out.push(`image ${image} (existing: ${running})`);
+  }
+  if (req.mongo && resolved !== null && resolved.mongoTag !== meta.mongoTag) {
+    out.push(`MongoDB ${resolved.mongoTag} (existing: ${meta.mongoTag})`);
+  }
+  if (req.domain) {
+    // As TLS reads it (`https://RC.Example.com/` is `rc.example.com`), which runs after this.
+    const asked = attempt(() => normalizeDomain(req.domain)[0], req.domain.toLowerCase());
+    const host = attempt(() => new URL(meta.publicUrl).hostname, meta.publicUrl);
+    if (asked !== host) out.push(`domain ${asked} (existing: ${host || 'none, plain HTTP'})`);
+  } else if ((req.https || req.acmeEmail) && !meta.publicUrl) {
+    out.push('HTTPS (existing: plain HTTP)');
+  }
+  const instances = Number(extra.instances ?? 0);
+  // A typed `--set instances=N` is named with the other params below.
+  if (
+    instances > 1 &&
+    req.replicas &&
+    req.replicas !== instances &&
+    !Object.hasOwn(typed, topology.LEGACY_REPLICA_PARAM)
+  ) {
+    out.push(`--replicas ${String(req.replicas)} (existing: ${String(instances)})`);
+  }
+  // Only what was typed: a host derived from the root URL, or the record's own params carried
+  // back, is not a request.
+  const preset = presetName || meta.preset;
+  const names = namesOf(preset);
+  const [asked, kept] =
+    names.length > 1
+      ? [
+          qualifiedParams(request.paramsByPreset(names, typed)),
+          qualifiedParams(bag(extra.preset_params)),
+        ]
+      : [request.unqualifiedParams(preset, typed), bag(extra.params)];
+  const params = Object.entries(asked)
+    .filter(([key, value]) => !Object.hasOwn(kept, key) || String(kept[key]) !== String(value))
+    .map(([key, value]) => `${key}=${redactEnv(key, String(value))}`);
+  if (params.length > 0) out.push(`--set ${params.join(' ')}`);
+  const env = bag(extra.env);
+  // Keys only: a value can be a secret.
+  const keys = Object.entries(req.env)
+    .filter(([key, value]) => !Object.hasOwn(env, key) || String(env[key]) !== String(value))
+    .map(([key]) => key);
+  if (keys.length > 0) {
+    out.push(`environment ${keys.join(', ')} (\`houston env --set\` changes it in place)`);
+  }
+  return out;
+}
+
+function attempt<T>(read: () => T, fallback: T): T {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+}
+
 /** Reuse an existing workspace exactly as recorded, saying so when that ignores a flag. */
 export async function reuse(
   name: string,
@@ -353,7 +454,13 @@ export async function reuse(
     streamOutput,
     resolved = null,
     presetName = '',
-  }: { streamOutput: boolean; resolved?: Resolved | null; presetName?: string } = {
+    typedParams = req.params,
+  }: {
+    streamOutput: boolean;
+    resolved?: Resolved | null;
+    presetName?: string;
+    typedParams?: Record<string, unknown>;
+  } = {
     streamOutput: false,
   },
 ): Promise<Bag> {
@@ -372,6 +479,11 @@ export async function reuse(
     mismatch.push('monitoring (existing: not attached)');
   }
   if (req.license !== '') mismatch.push('the license');
+  if (req.port && req.port !== meta.hostPort) {
+    mismatch.push(`port ${String(req.port)} (existing: ${String(meta.hostPort)})`);
+  }
+  if (req.regToken !== '') mismatch.push('the registration token');
+  mismatch.push(...ignoredSettings(req, meta, resolved, presetName, typedParams));
   if (mismatch.length > 0) {
     // A rebuild onto another preset removes what the old one kept -- an s3_minio workspace's
     // uploads -- so that is said where --force is offered, not discovered after it.
@@ -474,8 +586,11 @@ export async function carryRecordedAxes(req: CreateReq, name: string): Promise<v
   if (req.runtime && topology.normalize(req.runtime) !== was.runtime) return;
   if (!req.deployment) {
     req.deployment = String(was.deployment ?? '');
-    // The count belongs to that shape; with a --deployment typed it is the user's to give.
-    if (!req.replicas) req.replicas = Number(was.replicas) || 0;
+    // The count belongs to that shape; with a --deployment typed it is the user's to give, and
+    // so is a typed `--set instances=N` -- carried here, the record's count would beat it.
+    if (!req.replicas && req.params[topology.LEGACY_REPLICA_PARAM] === undefined) {
+      req.replicas = Number(was.replicas) || 0;
+    }
   }
   req.context ||= String(was.context ?? '');
   req.mongoOperator ||= was.mongoOperator === true;
@@ -603,22 +718,32 @@ export async function resolvePairing(plan: CreatePlan): Promise<void> {
   if (conflict) throw new PreflightError(conflict);
 }
 
-/** The preset, its parameters, and whether this create has to wait for readiness. */
-export function loadPreset(plan: CreatePlan): void {
+/**
+ * The preset, its parameters, and whether this create has to wait for readiness. `ports` is
+ * the workspace's side ports (`claimPorts` builds it again on the ones it was given); the
+ * default, every preferred port, is what the ports are allocated FROM.
+ */
+export function loadPreset(plan: CreatePlan, ports: config.PortMap = {}): void {
   const names = namesOf(plan.req.preset);
   if (names.length > 1) {
     // Several presets: params routed to each, then one Preset merged from them. A key the
     // user sets with --env/--setting is theirs to decide when two presets disagree on it.
     const byPreset = request.paramsByPreset(names, plan.req.params);
     plan.presetParams = byPreset;
-    plan.pre = presets.loadMany(names, byPreset, 'docker', new Set(Object.keys(plan.req.env)));
+    plan.pre = presets.loadMany(
+      names,
+      byPreset,
+      'docker',
+      new Set(Object.keys(plan.req.env)),
+      ports,
+    );
     refuseEnforcedBefore880(plan.pre, plan.resolved?.rcVersion ?? '');
     refuseVoiceBefore800(plan.pre, plan.resolved?.rcVersion ?? '');
     plan.wait = plan.req.wait || plan.pre.postReady.length > 0 || plan.req.seed;
     return;
   }
   try {
-    plan.pre = presets.load(plan.req.preset, plan.req.params);
+    plan.pre = presets.load(plan.req.preset, plan.req.params, ports);
   } catch (error) {
     throw new ValidationError(error instanceof Error ? error.message : String(error));
   }
@@ -671,15 +796,46 @@ async function stillOwnPort(name: string, port: number): Promise<boolean> {
   return ['running', 'restarting'].includes(await rcState(name));
 }
 
-/** The host port, the URL houston will call itself by, and the TLS plan. */
+/**
+ * The side and monitoring ports, then the host port, the URL houston will call itself by, and
+ * the TLS plan.
+ */
 export async function claimPorts(plan: CreatePlan): Promise<void> {
-  const pre = plan.pre as Preset;
   await preconditions.guardProjectCollision(plan.reproName);
-  await ports.checkSidecarPorts(pre, plan.reproName);
-  if (plan.req.monitor) await ports.checkMonitorPorts(plan.reproName);
-  const allocation = plan.req.monitor
-    ? { ...pre, ports: [...pre.ports, ...config.MONITOR_PORTS] }
-    : pre;
+  // Preferred first; a port another workspace holds is given the next free one, and the record
+  // keeps what this got. A rebuild keeps its own while its containers still hold them.
+  const span = (plan.pre as Preset).instances > 1 ? (plan.pre as Preset).instances + 1 : 1;
+  const claim = await ports.claimSidePorts(
+    plan.reproName,
+    plan.pre as Preset,
+    (given) => {
+      loadPreset(plan, given);
+      return plan.pre as Preset;
+    },
+    {
+      monitoring: plan.req.monitor ? ['prometheus', 'grafana'] : [],
+      reserve: plan.req.port
+        ? Array.from({ length: span }, (_, offset) => plan.req.port + offset)
+        : [],
+      // Free, or published by one of its own running containers. Rocket.Chat's state alone is not
+      // enough: after a failed boot it is `created` while its own Mailpit still holds 8025.
+      stillHeld: async (port) =>
+        (await portSeam.portFree(port)) || (await engine.publishedPorts(plan.reproName)).has(port),
+    },
+  );
+  plan.pre = claim.pre;
+  plan.sidePorts = claim.side;
+  plan.monitorPorts = claim.monitoring;
+  for (const [whose, was, now] of claim.moved) {
+    warn(
+      plan.emit,
+      `${whose}'s port ${String(was)} is no longer free, so '${plan.reproName}' publishes it ` +
+        `on ${String(now)}`,
+      { phase: 'plan' },
+    );
+  }
+  const pre = claim.pre;
+  const allocation = { ...pre, ports: [...pre.ports, ...plan.monitorPorts] };
   // A rebuild keeps its recorded port, as a Kubernetes re-up does: allocating afresh moved
   // it to the lowest free one (3301 to 3000), and every link to it went dead. Only while
   // nothing else has taken that port; then it gets a new one, as before.
@@ -782,8 +938,8 @@ export function warnAboutTheBind(plan: CreatePlan): void {
     // THE SAME EXPOSURE, ASKED FOR RATHER THAN DERIVED, AND IT WAS SILENT. The warning
     // above fires only when houston widened the bind ITSELF for an ACME challenge; `up
     // --bind 0.0.0.0` typed by hand got the normal panel and nothing else.
-    const side = config.PRESET_PORTS[plan.req.preset] !== undefined ? plan.req.preset : '';
-    const sideText = side ? `${side}:${String(config.PRESET_PORTS[side]?.[0] ?? '')}` : '';
+    const side = plan.req.preset in PRESET_LINKS ? plan.req.preset : '';
+    const sideText = side ? `${side}:${String(presetPort(side, 0, plan.sidePorts))}` : '';
     // WHAT THE PANEL DOES NOT ALREADY SAY, and nothing else. The Rocket.Chat admin is
     // generated for a workspace bound this wide and printed two lines below, so repeating
     // it here is a sentence people learn to scroll past.
@@ -895,7 +1051,7 @@ function warnAboutOneBrowserHost(plan: CreatePlan, preset: string, key: string):
     oidc: 'keycloak',
     s3_minio: 'minio',
   };
-  const servicePort = config.PRESET_PORTS[preset]?.[0] ?? 0;
+  const servicePort = presetPort(preset, 0, plan.sidePorts);
   const advertised = plan.req.rootUrl || plan.req.domain;
   let why = '';
   if (!LOOPBACK_BINDS.includes(plan.bindHost)) {
@@ -1001,6 +1157,7 @@ export async function buildDocument(plan: CreatePlan): Promise<void> {
     preset: plan.pre as Preset,
     bindHost: plan.bindHost,
     monitoring: plan.req.monitor,
+    monitorPorts: plan.monitorPorts,
     envOverrides: plan.envOverrides,
   });
   plan.spec.adminPassword = plan.adminPassword;
@@ -1077,6 +1234,8 @@ export function buildRecord(plan: CreatePlan): void {
   if (pre.instances > 1) plan.meta.extra.instances = pre.instances;
   if (Object.keys(pre.extra).length > 0) Object.assign(plan.meta.extra, pre.extra);
   if (pre.ports.length > 0) plan.meta.extra.sidecar_ports = pre.ports;
+  // Only what moved: a workspace on the preferred ports reads as every earlier one does.
+  if (Object.keys(plan.sidePorts).length > 0) plan.meta.extra.side_ports = plan.sidePorts;
   if (Object.keys(plan.envOverrides).length > 0) plan.meta.extra.env = plan.envOverrides;
   if (spec.licensed) plan.meta.extra.licensed = true;
   if (plan.req.actor) {
@@ -1105,11 +1264,14 @@ export function attachMonitoring(plan: CreatePlan): void {
   const targets = compose.rcServiceNames((plan.pre as Preset).instances);
   plan.files.push(...monitoringFiles(targets, (plan.spec as compose.Spec).projectName));
   meta.extra.monitoring = true;
-  meta.extra.monitoring_ports = [...config.MONITOR_PORTS];
+  meta.extra.monitoring_ports = [...plan.monitorPorts];
   const notes = Array.isArray(meta.extra.notes) ? [...meta.extra.notes] : [];
   meta.extra.notes = [
     ...notes,
-    ...monitoringNotes(monitoringGrafanaUrl(plan.public, !!plan.public)),
+    ...monitoringNotes(
+      monitoringGrafanaUrl(plan.public, !!plan.public, record.grafanaPortOf(meta)),
+      record.prometheusPortOf(meta),
+    ),
   ];
 }
 
@@ -1551,6 +1713,7 @@ async function createSettled(plan: CreatePlan): Promise<Bag> {
       streamOutput: plan.streamOutput,
       resolved: plan.resolved,
       presetName: (plan.pre as Preset).name,
+      typedParams: plan.typedParams,
     });
   }
   await refuseMongoFamilyChange(plan);

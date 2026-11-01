@@ -20,12 +20,12 @@
  *   registration   show the pre-chat registration form first (default false).
  *   department     create an Omnichannel department (default true).
  */
+import type { PortMap } from '../config';
+
 import { guide } from './guides';
-import { EMAIL_2FA, intParam, k8sManifests, presetPort, presetPorts, truthyParam } from './common';
+import { EMAIL_2FA, intParam, k8sManifests, presetPort, truthyParam } from './common';
 import { type Params, register } from './registry';
 import { emptyPreset, type Preset } from './types';
-
-const WIDGET_PORT = presetPort('livechat');
 
 /**
  * A realistic-looking storefront so the widget sits in a believable page.
@@ -114,18 +114,18 @@ const WIDGET_PAGE = `<!doctype html>
 </html>
 `;
 
-/** Render the static storefront with its configured host port. */
-function widgetPage(): string {
-  return WIDGET_PAGE.split('__WIDGET_PORT__').join(String(WIDGET_PORT));
+/** Render the static storefront with the workspace's host port for it. */
+function widgetPage(port: number): string {
+  return WIDGET_PAGE.split('__WIDGET_PORT__').join(String(port));
 }
 
 /** Compose service for the separate customer-site origin. */
-function widgetService(): Record<string, Record<string, unknown>> {
+function widgetService(port: number): Record<string, Record<string, unknown>> {
   return {
     'widget-site': {
       image: 'docker.io/nginx:alpine', // multi-arch
       volumes: ['./livechat/index.html:/usr/share/nginx/html/index.html:ro'],
-      ports: [`${String(WIDGET_PORT)}:80`],
+      ports: [`${String(port)}:80`],
       restart: 'unless-stopped',
     },
   };
@@ -166,12 +166,12 @@ function livechatNotes(widgetUrl: string): string[] {
 }
 
 /** The customer-site workload, page ConfigMap, and published Service. */
-function widgetManifests(): string {
+function widgetManifests(port: number): string {
   return k8sManifests({
     name: 'widget-site',
     image: 'docker.io/nginx:alpine',
-    ports: [[WIDGET_PORT, 80]],
-    files: { 'index.html': widgetPage() },
+    ports: [[port, 80]],
+    files: { 'index.html': widgetPage(port) },
     mounts: [
       {
         name: 'files',
@@ -185,15 +185,16 @@ function widgetManifests(): string {
       periodSeconds: 3,
       failureThreshold: 30,
     },
-    ui: { 'widget-site': [WIDGET_PORT, 80] },
+    ui: { 'widget-site': [port, 80] },
   });
 }
 
-export function build(params: Params): Preset {
+export function build(params: Params, ports: PortMap): Preset {
   const agents = Math.max(1, intParam(params, 'agents', 1));
   const registration = truthyParam(params, 'registration');
   const department = truthyParam(params, 'department', true); // created by default
-  const widgetUrl = `http://localhost:${String(WIDGET_PORT)}`;
+  const port = presetPort('livechat', 0, ports);
+  const widgetUrl = `http://localhost:${String(port)}`;
   return {
     ...emptyPreset('livechat'),
     description:
@@ -202,13 +203,13 @@ export function build(params: Params): Preset {
       '/ routing / agent-availability tickets. Admin is the agent.',
     env: livechatSettings(registration),
     softEnv: [EMAIL_2FA],
-    services: widgetService(),
+    services: widgetService(port),
     dependsOn: ['widget-site'],
     requiresLicense: false,
     source: 'built-in (dynamic)',
-    files: [['livechat/index.html', widgetPage()]],
-    ports: [...presetPorts('livechat')],
-    kubernetesManifests: [widgetManifests()],
+    files: [['livechat/index.html', widgetPage(port)]],
+    ports: [port],
+    kubernetesManifests: [widgetManifests(port)],
     paramsHelp: {
       agents: 'agents to create + assign to the department (default 1; admin is always an agent)',
       registration: 'show the pre-chat registration form (default false)',

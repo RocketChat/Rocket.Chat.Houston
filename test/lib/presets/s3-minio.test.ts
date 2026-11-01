@@ -16,7 +16,7 @@ describe('s3_minio on Kubernetes', () => {
     // MinIO wrote /data into the container's own filesystem: the first `stop` (a scale to
     // zero) took every uploaded file and the bucket, and the one-shot bucket Job never ran
     // again, so uploads failed for good. Compose keeps the same directory in `minio_data`.
-    const docs = docsOf(build({}).kubernetesManifests[0] as string);
+    const docs = docsOf(build({}, {}).kubernetesManifests[0] as string);
     const claim = named(docs, 'PersistentVolumeClaim', 'minio-data');
     expect(claim).toBeDefined();
     const deployment = named(docs, 'Deployment', 'minio') as Bag;
@@ -37,7 +37,7 @@ describe('s3_minio on Docker', () => {
     // `until mc alias set ...; done; mc mb` retried only the connection. On rootless Podman
     // the bucket step met a DNS flap ("lookup minio: i/o timeout") and the one-shot
     // container exited for good, with no bucket.
-    const init = (build({}).services['minio-init'] ?? {}) as { entrypoint?: string[] };
+    const init = (build({}, {}).services['minio-init'] ?? {}) as { entrypoint?: string[] };
     const script = (init.entrypoint ?? []).join(' ');
     expect(script).toMatch(
       /^sh -c until mc alias set local \S+ \S+ \S+ && mc mb -p local\/\S+; do sleep 1; done$/,

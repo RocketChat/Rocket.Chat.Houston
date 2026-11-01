@@ -277,6 +277,155 @@ describe('the port registry, on every runtime', () => {
   });
 });
 
+/** Every registry port moved by 100, as a second workspace with each preset would get them. */
+const SHIFTED: config.PortMap = Object.fromEntries(
+  Object.entries(config.PRESET_PORTS).map(([name, ports]) => [name, ports.map((p) => p + 100)]),
+);
+
+/** Each preset in every shape that publishes something different, on both runtimes. */
+const SHAPES: readonly (readonly [string, Record<string, unknown>])[] = [
+  ['email', {}],
+  ['saml', {}],
+  ['oidc', {}],
+  ['s3_minio', {}],
+  ['s3_minio', { presigned: 'true' }],
+  ['livechat', {}],
+  ['ldap', {}],
+  ['ldap', { idp: 'saml' }],
+  ['ldap', { idp: 'oidc' }],
+];
+
+describe('a workspace given shifted ports', () => {
+  it('publishes exactly the ports it was given, through both adapters', () => {
+    // A second workspace with the same preset is given other ports. Every one it declares is
+    // the one allocation chose: what it claims is what it publishes.
+    for (const [name, params] of SHAPES) {
+      const idp = String(params.idp ?? 'none');
+      const expected = [
+        ...(SHIFTED[name] ?? []),
+        ...(name === 'ldap' && idp !== 'none' ? (SHIFTED[idp] ?? []) : []),
+      ];
+      for (const runtime of ['docker', 'kubernetes']) {
+        expect({
+          name,
+          params,
+          runtime,
+          ports: resolve(name, runtime, params, SHIFTED).ports,
+        }).toEqual({ name, params, runtime, ports: expected });
+      }
+    }
+  });
+
+  it('sends nobody to a preferred port: no address names one, on either runtime', () => {
+    // An address still built from the registry opens SOMEONE ELSE's Mailpit, Keycloak or
+    // console. Container-side numbers (Mailpit's 8025 inside, Keycloak's 8080) are not
+    // addresses a browser or houston follows, so the pattern names a host before the port.
+    const preferred = Object.values(config.PRESET_PORTS).flat();
+    const address = new RegExp(
+      `(localhost|127\\.0\\.0\\.1|keycloak|minio):(${preferred.join('|')})\\b`,
+      'u',
+    );
+    // The pattern finds them where they are: at the preferred ports, every preset names one.
+    for (const [name, params] of SHAPES) {
+      expect({
+        name,
+        params,
+        found: address.test(JSON.stringify(resolve(name, 'docker', params))),
+      }).toEqual({ name, params, found: true });
+    }
+    for (const [name, params] of SHAPES) {
+      for (const runtime of ['docker', 'kubernetes']) {
+        const text = JSON.stringify(resolve(name, runtime, params, SHIFTED));
+        expect({ name, params, runtime, found: address.exec(text)?.[0] ?? null }).toEqual({
+          name,
+          params,
+          runtime,
+          found: null,
+        });
+      }
+    }
+  });
+
+  it('wires each side service to its own port where the browser, Rocket.Chat and houston meet it', () => {
+    const email = load('email', {}, SHIFTED);
+    expect(email.services.mailpit?.ports).toEqual(['8125:8025']);
+    // houston reads email 2FA codes from here: another workspace's inbox would never get them.
+    expect(email.extra.mailpit_url).toBe('http://localhost:8125');
+    expect(
+      g(named(kube2('email'), 'Service', 'mailpit'), 'metadata', 'labels', 'houston.io/ui-port'),
+    ).toBe('8125');
+
+    const saml = load('saml', {}, SHIFTED);
+    expect(saml.services.keycloak?.ports).toEqual(['8181:8080']);
+    expect(saml.env.OVERWRITE_SETTING_SAML_Custom_Default_entry_point).toBe(
+      'http://localhost:8181/realms/houston/protocol/saml',
+    );
+    expect(action(saml.postReady, 'saml_idp_cert')?.descriptor_url).toBe(
+      'http://localhost:8181/realms/houston/protocol/saml/descriptor',
+    );
+
+    // OIDC listens on its host port: the one URL means one port to the browser and to RC.
+    const oidc = load('oidc', {}, SHIFTED);
+    expect(oidc.services.keycloak?.ports).toEqual(['8185:8185']);
+    expect(g(oidc.services.keycloak, 'environment', 'KC_HTTP_PORT')).toBe('8185');
+    expect(action(oidc.postReady, 'keycloak_master_ssl_off')?.port).toBe(8185);
+    expect(g(action(oidc.postReady, 'create_oauth_provider'), 'settings')).toEqual(
+      expect.objectContaining({
+        'Accounts_OAuth_Custom-Keycloak-url': 'http://keycloak:8185/realms/houston',
+      }),
+    );
+    const oidcService = named(kube2('oidc'), 'Service', 'keycloak');
+    expect(g(oidcService, 'spec', 'ports', 0, 'port')).toBe(8185);
+
+    // MinIO's S3 API is followed by RC and (presigned) the browser at one URL, so MinIO has to
+    // LISTEN on the moved port; its console already listens where it is published.
+    const s3 = load('s3_minio', {}, SHIFTED);
+    expect(s3.services.minio?.ports).toEqual(['9100:9100', '9101:9101']);
+    expect(s3.services.minio?.command).toEqual([
+      'server',
+      '/data',
+      '--console-address',
+      ':9101',
+      '--address',
+      ':9100',
+    ]);
+    expect(s3.env.OVERWRITE_SETTING_FileUpload_S3_BucketURL).toBe('http://minio:9100');
+    expect(JSON.stringify(s3.services['minio-init'])).toContain('http://minio:9100');
+    const minio = named(kube2('s3_minio'), 'Deployment', 'minio');
+    const container = g(minio, 'spec', 'template', 'spec', 'containers', 0);
+    expect(g(container, 'args')).toEqual(s3.services.minio?.command);
+    expect(g(container, 'readinessProbe', 'httpGet', 'port')).toBe(9100);
+    // At the preferred ports MinIO runs the command it always did.
+    expect(load('s3_minio').services.minio?.command).toEqual([
+      'server',
+      '/data',
+      '--console-address',
+      ':9001',
+    ]);
+
+    const livechat = load('livechat', {}, SHIFTED);
+    expect(livechat.services['widget-site']?.ports).toEqual(['8190:80']);
+    expect(Object.fromEntries(livechat.files)['livechat/index.html']).toContain(
+      'http://localhost:8190',
+    );
+
+    const ldap = resolve('ldap', 'docker', { idp: 'saml' }, SHIFTED);
+    expect(ldap.services.phpldapadmin?.ports).toEqual(['8182:8080']);
+    expect(ldap.services.keycloak?.ports).toEqual(['8181:8080']);
+    const ldapUi = named(kube2('ldap', { idp: 'oidc' }), 'Service', 'phpldapadmin');
+    expect(g(ldapUi, 'metadata', 'labels', LDAP_UI_PORT_LABEL)).toBe('8182');
+    const ldapKeycloak = named(kube2('ldap', { idp: 'oidc' }), 'Deployment', 'keycloak');
+    expect(g(ldapKeycloak, 'spec', 'template', 'metadata', 'labels', KEYCLOAK_UI_PORT_LABEL)).toBe(
+      '8185',
+    );
+  });
+});
+
+/** `kube`, for a workspace given the shifted ports. */
+function kube2(name: string, params: Record<string, unknown> = {}): Doc[] {
+  return resolve(name, 'kubernetes', params, SHIFTED).kubernetesManifests.flatMap((m) => docs(m));
+}
+
 describe('the ldap scenario', () => {
   it('renders ONE intent for both runtimes: shared settings, different backing', () => {
     const params = { users: '7', domain: 'example.org' };

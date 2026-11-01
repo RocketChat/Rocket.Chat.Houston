@@ -22,7 +22,7 @@ import { register as registerRoute } from './edge/routes';
 
 import { login } from './lifecycle/admin';
 import { resolveName } from './lifecycle/naming';
-import { checkMonitorPorts } from './lifecycle/ports';
+import { claimMonitorPorts, withPortPublication } from './lifecycle/ports';
 import { requireDocker } from './lifecycle/preconditions';
 import { stopPortForward } from './lifecycle/ready';
 import { setSetting } from './rcapi';
@@ -164,7 +164,6 @@ export async function attach(name: string, emit: Emit = nullEmit): Promise<Bag> 
 export async function attachLocked(target: string, emit: Emit = nullEmit): Promise<Bag> {
   const m = await readMeta(target);
   const doc = await readCompose(m.name);
-  await checkMonitorPorts(m.name); // raises ConflictError on a taken port
   try {
     const auth = await login(m);
     if (!(await setSetting(m.rootUrl, auth, adminPass(m), monitoring.RC_METRICS_SETTING, true))) {
@@ -178,25 +177,38 @@ export async function attachLocked(target: string, emit: Emit = nullEmit): Promi
 
   const services = setDefault(doc, 'services', m.name);
   const publicUrl = isTruthy(bagOf(m.extra).tls) ? m.publicUrl : '';
-  const grafana = monitoring.grafanaUrl(publicUrl, !!publicUrl);
-  const notes = monitoring.notes(grafana);
-  Object.assign(
-    services,
-    monitoring.bindPorts(monitoring.services(publicUrl), detectBind(doc, m.name)),
-  );
-  Object.assign(setDefault(doc, 'volumes', m.name), monitoring.volumes());
-  const extra = bagOf(m.extra);
-  m.extra = extra;
-  extra.monitoring = true;
-  extra.monitoring_ports = [...config.MONITOR_PORTS];
-  extra.notes = [...notesWithoutMonitoring(extra), ...notes];
   const targets = rcServicesIn(doc);
-  await write(
-    m.name,
-    toYaml(forEngine(doc as unknown as ComposeDoc, await engine())),
-    m,
-    monitoring.files(targets.length > 0 ? targets : ['rocketchat'], m.project),
-  );
+  // Chosen and written down under the port lock, as a create does, so two attaches at once --
+  // or one beside a create -- cannot be given the same pair. The slow part (the login and the
+  // setting above) is already done; the `up` below runs after the lock is released.
+  const { grafana, notes } = await withPortPublication(async () => {
+    const [prometheusPort = 0, grafanaPort = 0] = await claimMonitorPorts(m.name, [
+      'prometheus',
+      'grafana',
+    ]);
+    const url = monitoring.grafanaUrl(publicUrl, !!publicUrl, grafanaPort);
+    const lines = monitoring.notes(url, prometheusPort);
+    Object.assign(
+      services,
+      monitoring.bindPorts(
+        monitoring.services(publicUrl, [prometheusPort, grafanaPort]),
+        detectBind(doc, m.name),
+      ),
+    );
+    Object.assign(setDefault(doc, 'volumes', m.name), monitoring.volumes());
+    const extra = bagOf(m.extra);
+    m.extra = extra;
+    extra.monitoring = true;
+    extra.monitoring_ports = [prometheusPort, grafanaPort];
+    extra.notes = [...notesWithoutMonitoring(extra), ...lines];
+    await write(
+      m.name,
+      toYaml(forEngine(doc as unknown as ComposeDoc, await engine())),
+      m,
+      monitoring.files(targets.length > 0 ? targets : ['rocketchat'], m.project),
+    );
+    return { grafana: url, notes: lines };
+  });
 
   info(emit, 'attaching monitoring (pulling images if needed)...', { phase: 'boot' });
   if ((await up(m.name, { pull: true })) !== 0) {
@@ -258,7 +270,6 @@ export async function attachKubernetes(target: string, emit: Emit = nullEmit): P
   await (await import('./kube/namespace')).requireOwnNamespace(m.name, { context });
   const extra = bagOf(m.extra);
   const publicUrl = isTruthy(extra.tls) ? m.publicUrl : '';
-  if (!publicUrl) await checkMonitorPorts(m.name);
   try {
     const auth = await login(m);
     if (!(await setSetting(m.rootUrl, auth, adminPass(m), monitoring.RC_METRICS_SETTING, true))) {
@@ -293,7 +304,24 @@ export async function attachKubernetes(target: string, emit: Emit = nullEmit): P
       emit,
     });
   }
-  const port = config.MONITOR_PORTS[1];
+  // This box's Grafana forward: its own port while it holds one, else preferred first --
+  // chosen and claimed under the port lock (inside the workspace's, the order every create
+  // takes them in) so a concurrent attach or create cannot be given the same one.
+  const port = publicUrl
+    ? 0
+    : await reproLock(
+        target,
+        async () =>
+          await withPortPublication(async () => {
+            const [grafana = 0] = await claimMonitorPorts(m.name, ['grafana']);
+            await updateMeta(m.name, (meta) => {
+              const claimed = bagOf(meta.extra);
+              meta.extra = claimed;
+              claimed.monitoring_ports = [grafana];
+            });
+            return grafana;
+          }),
+      );
   const previousPid = extra.grafana_pid;
   if (isTruthy(previousPid))
     await stopPortForward(toInt(previousPid), { namespace: k8s.MONITORING_NAMESPACE });
@@ -318,7 +346,7 @@ export async function attachKubernetes(target: string, emit: Emit = nullEmit): P
       extra.grafana_pid = pid;
     }
   });
-  const grafana = monitoring.grafanaUrl(publicUrl, true);
+  const grafana = monitoring.grafanaUrl(publicUrl, true, port);
   // Don't hand over a URL that has not answered yet. `port-forward` returns a pid before
   // it binds the socket, and the workspace path already carries a test named for this
   // exact mistake — so this waits, and says so rather than printing a link that quietly

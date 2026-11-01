@@ -189,9 +189,13 @@ preset whose Kubernetes shape differs from its Compose shape is a `Scenario`
 - **`postReady`**: actions run once Rocket.Chat serves. Each `action` must match a key
   in `POST_READY_ACTIONS` in `src/core/postready.ts`, and **one with no handler is
   skipped silently.** Add the handler and a test that runs it in the same change.
-- **`ports`**: host ports the side services publish. Add them to `PRESET_PORTS` in
-  `src/lib/config.ts`, and set `ports: [...presetPorts('<name>')]` on every adapter,
-  Kubernetes included. Never hard-code a bind host; everything binds `127.0.0.1`.
+- **`ports`**: host ports the side services publish. Add their preferred numbers to
+  `PRESET_PORTS` in `src/lib/config.ts`. A builder is `build(params, ports)`: read each port
+  with `presetPort('<name>', index, ports)`, build every address and mapping from that value,
+  and set `ports: [...]` to the same numbers on every adapter, Kubernetes included. A second
+  workspace with the preset is given other ports, so a number read from the registry instead
+  sends its browser to someone else's service (`test/core/invariants/source-rules.test.ts`
+  holds the source to this). Never hard-code a bind host; everything binds `127.0.0.1`.
 
 ---
 

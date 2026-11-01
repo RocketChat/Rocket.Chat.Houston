@@ -2,6 +2,7 @@
  * A preset's own UIs at paths of the workspace's HTTPS name: Mailpit, the livechat demo page,
  * Keycloak, the MinIO console and phpLDAPadmin, on both runtimes.
  */
+import * as config from '../../../src/lib/config';
 import { safeLoadAll } from '../../../src/lib/presets/common';
 import { load, loadMany, resolve } from '../../../src/lib/presets/index';
 import {
@@ -368,6 +369,76 @@ describe('phpLDAPadmin at /phpldapadmin', () => {
       '/minio',
       '/phpldapadmin',
     ]);
+  });
+});
+
+describe('a workspace on shifted ports, over HTTPS', () => {
+  // A second workspace with these presets publishes other host ports; the nginx fronts, the
+  // filters and the note rewrites must follow the ports its preset publishes, not the registry.
+  const SHIFTED: config.PortMap = Object.fromEntries(
+    Object.entries(config.PRESET_PORTS).map(([name, ports]) => [name, ports.map((p) => p + 100)]),
+  );
+  const label = (pre: Preset, name: string): unknown =>
+    (
+      docs(pre).find((d) => d.kind === 'Service' && (d.metadata as Bag).name === name) as
+        { metadata: { labels: Bag } } | undefined
+    )?.metadata.labels['houston.io/ui-port'];
+
+  it('fronts the MinIO console on its own port, and drops only that mapping (Compose)', () => {
+    const pre = withPublicUrl(load('s3_minio', {}, SHIFTED), URL_, 'docker');
+    expect(pre.services['minio-ui']?.ports).toEqual(['9101:80']);
+    expect(pre.services.minio?.ports).toEqual(['9100:9100']);
+    const text = (pre.files.find(([f]) => f === 's3_minio/minio-ui.conf') as [string, string])[1];
+    expect(text).toContain('proxy_pass http://minio:9101/;');
+    expect(pre.notes.join('\n')).toContain(`MinIO console: ${URL_}/minio/`);
+    expect(pre.notes.join('\n')).not.toContain('localhost:9101');
+  });
+
+  it('forwards the moved console port to the nginx (Kubernetes)', () => {
+    const pre = withPublicUrl(resolve('s3_minio', 'kubernetes', {}, SHIFTED), URL_, 'kubernetes');
+    expect(label(pre, 'minio-ui')).toBe('9101');
+    expect(label(pre, 'minio-console')).toBeUndefined();
+    const cm = docs(pre).find((d) => (d.metadata as Bag).name === 'minio-ui-files') as {
+      data: Record<string, string>;
+    };
+    expect(cm.data['default.conf']).toContain('proxy_pass http://minio:9101/;');
+  });
+
+  it('fronts phpLDAPadmin on its own port on both runtimes', () => {
+    const docker = withPublicUrl(load('ldap', {}, SHIFTED), URL_, 'docker');
+    expect(docker.services['ldap-ui']?.ports).toEqual(['8182:80']);
+    expect(docker.services.phpldapadmin?.ports).toBeUndefined();
+    expect(docker.notes.join('\n')).not.toContain('localhost:8182');
+    const kube = withPublicUrl(resolve('ldap', 'kubernetes', {}, SHIFTED), URL_, 'kubernetes');
+    expect(label(kube, 'ldap-ui')).toBe('8182');
+    expect(kube.notes.join('\n')).not.toContain('localhost:8182');
+  });
+
+  it("rewrites a moved Mailpit's note on both runtimes, and reads 2FA codes from its own port", () => {
+    for (const [pre, runtime] of [
+      [load('email', {}, SHIFTED), 'docker'],
+      [resolve('email', 'kubernetes', {}, SHIFTED), 'kubernetes'],
+    ] as const) {
+      const out = withPublicUrl(pre, URL_, runtime);
+      expect({ runtime, url: out.extra.mailpit_url }).toEqual({
+        runtime,
+        url: 'http://localhost:8125/mailpit',
+      });
+      expect({ runtime, stale: out.notes.join('\n').includes('localhost:8125') }).toEqual({
+        runtime,
+        stale: false,
+      });
+      expect(out.notes.join('\n')).toContain(`${URL_}/mailpit/`);
+    }
+  });
+
+  it("sends a moved Keycloak's browser to the path, and keeps houston's fetch on its port", () => {
+    const pre = withPublicUrl(load('saml', {}, SHIFTED), URL_, 'docker');
+    expect(pre.notes.join('\n')).not.toMatch(/:8181\b/u);
+    const cert = pre.postReady.find((a) => a.action === 'saml_idp_cert');
+    expect(cert?.descriptor_url).toBe(
+      'http://localhost:8181/keycloak/realms/houston/protocol/saml/descriptor',
+    );
   });
 });
 

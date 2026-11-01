@@ -285,10 +285,10 @@ function builtinStems(): string[] {
 }
 
 /** Load a legacy dynamic or static preset without scenario dispatch. */
-function loadNonScenario(name: string, params: registry.Params): Preset {
+function loadNonScenario(name: string, params: registry.Params, ports: config.PortMap): Preset {
   const builders = dynamicBuilders();
   const builder = builders[name];
-  if (builder !== undefined) return builder(params);
+  if (builder !== undefined) return builder(params, ports);
 
   const builtin = config.dataPath('presets', `${name}.yaml`);
   if (!fs.existsSync(builtin) || !fs.statSync(builtin).isFile()) {
@@ -303,15 +303,23 @@ function loadNonScenario(name: string, params: registry.Params): Preset {
  * Precedence: a user file (~/.houston/presets/<name>.yaml) wins over everything -- so
  * users can override even a dynamic preset like `ldap`/`saml`. Otherwise a dynamic preset
  * is built from `params`, else the built-in YAML is used.
+ *
+ * `ports` is the workspace's side ports, sparse (`common.presetPorts`): the default `{}`
+ * builds every preferred port, which is right for the catalogue and for validation, and
+ * wrong for anything that publishes or links a workspace's own.
  */
-export function load(name: string, params?: registry.Params | null): Preset {
+export function load(
+  name: string,
+  params?: registry.Params | null,
+  ports: config.PortMap = {},
+): Preset {
   const given = params ?? {};
   const file = userPath(name);
   if (fs.existsSync(file)) return parse(fs.readFileSync(file, 'utf8'), file);
 
   const scenario = scenarioDefinitions()[name];
-  if (scenario !== undefined) return scenario.resolve(given, RUNTIME_DEFAULT);
-  return loadNonScenario(name, given);
+  if (scenario !== undefined) return scenario.resolve(given, RUNTIME_DEFAULT, ports);
+  return loadNonScenario(name, given, ports);
 }
 
 /**
@@ -343,6 +351,7 @@ export function loadMany(
   params: Readonly<Record<string, registry.Params>>,
   runtime: string,
   overridden: ReadonlySet<string> = new Set(),
+  ports: config.PortMap = {},
 ): Preset {
   const unique = namesOf(compositeName(names));
   const apart = unique.includes('ldap');
@@ -350,7 +359,7 @@ export function loadMany(
     const own: registry.Params = { ...(params[name] ?? {}) };
     if (apart && (name === 'saml' || name === 'oidc')) own[USER_PREFIX_PARAM] = 'sso-';
     return asValidation(() =>
-      runtime === 'kubernetes' ? resolve(name, runtime, own) : load(name, own),
+      runtime === 'kubernetes' ? resolve(name, runtime, own, ports) : load(name, own, ports),
     );
   });
   return composePresets(resolved, overridden);
@@ -367,6 +376,7 @@ export function resolve(
   name: string,
   deploymentType?: string | null,
   params?: registry.Params | null,
+  ports: config.PortMap = {},
 ): Preset {
   const given = params ?? {};
   const file = userPath(name);
@@ -380,9 +390,9 @@ export function resolve(
         deploymentType !== null && deploymentType !== undefined && deploymentType !== ''
           ? deploymentType
           : RUNTIME_DEFAULT;
-      return scenario.resolve(given, target);
+      return scenario.resolve(given, target, ports);
     }
-    preset = loadNonScenario(name, given);
+    preset = loadNonScenario(name, given, ports);
   }
 
   // Enforced only when the preset actually declares a requirement.
@@ -427,7 +437,9 @@ export function listPresets(): Preset[] {
     // which both front-ends offer as such. It stays loadable, for `--preset multi-instance`
     // (which still works, with a hint) and for the workspaces that recorded it.
     if (name === 'multi-instance') continue;
-    seen.set(name, build({})); // default params, just for description/params_help
+    // Default params and preferred ports, just for description/params_help: the catalogue
+    // names no workspace.
+    seen.set(name, build({}, {}));
   }
 
   const userDir = config.presetDir();

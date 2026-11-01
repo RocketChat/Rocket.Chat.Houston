@@ -80,9 +80,19 @@ keep them. `logs`, `env` (reading), `upgrade`, `backup`, `restore`, `seed`, `mon
 `token` and `stats` work on both runtimes (`stats` needs metrics-server and says how to
 install it).
 
+**LDAP users after a re-up:** the OpenLDAP directory keeps its entries inside its pod and reads
+its users once, when the pod starts. A re-up that changes them (`--set users=…`, `groups=on`,
+another `domain`) restarts the directory, so it serves the new users; entries you added by hand
+in phpLDAPadmin are not kept, and Rocket.Chat's accounts stay linked (they are matched by
+`uid`). A workspace an earlier houston made with up to 500 users and any of those set restarts
+its directory once, on its first `up` with this release. An Active Directory workspace
+(`directory=ad`) is unchanged.
+
 **Monitoring:** `houston monitor --name ticket-1234` (or `up --monitor`) installs one
 shared Grafana in `houston-system`. It opens at `https://<workspace-host>/grafana/` for an
-HTTPS workspace, else `http://localhost:5050/grafana/` (`admin/admin`). The GUI's
+HTTPS workspace, else `http://localhost:5050/grafana/` (`admin/admin`), or the next free
+port when another monitored workspace's forward holds 5050. That Grafana's own absolute
+links (sign-in redirects, share links) name 5050. The GUI's
 **Logs in Grafana (Loki)** link opens its logs dashboard. `houston monitor --name
 ticket-1234 --off` detaches it.
 

@@ -54,8 +54,6 @@ describe('live re-verification GUI regressions', () => {
   let workspace = { ...initialWorkspace };
   // Other workspaces on the box, beside `workspace`, as the list answers them.
   let others: Record<string, unknown>[] = [];
-  // What a restore as new is told holds the side ports its preset needs.
-  let held: { name: string; ports: number[] } | null = null;
   // Why the server would refuse this viewer the bundle ('' when it would not).
   let refusal = '';
   let listReads = 0;
@@ -78,7 +76,6 @@ describe('live re-verification GUI regressions', () => {
     edgeInstalled = false;
     workspace = { ...initialWorkspace };
     others = [];
-    held = null;
     refusal = '';
     listReads = 0;
     connections = 0;
@@ -171,7 +168,7 @@ describe('live re-verification GUI regressions', () => {
     app.post('/api/*', async (request, reply) => {
       // A read the GUI makes by POST: whether a restore as new could start.
       if (new URL(request.url, 'http://localhost').pathname === '/api/backups/compatibility')
-        return { compatibility: null, held, refusal };
+        return { compatibility: null, refusal };
       mutations += 1;
       return role === 'readonly'
         ? reply.code(403).send({ error: 'Your role is readonly.' })
@@ -250,34 +247,21 @@ describe('live re-verification GUI regressions', () => {
     expect(await page.locator('#detail').textContent()).not.toContain(`${workspace.name} is down`);
   });
 
-  test("restore as new names who holds the port, and advises deleting only the reader's own", async () => {
-    // On a shared server the workspace holding a preset's side port is often a colleague's,
-    // and the refusal named nobody and told whoever read it to delete it.
+  test("restore as new is offered beside a colleague's workspace on the preferred ports", async () => {
+    // A copy is given side ports of its own. The dialog used to name whoever held 8025 and
+    // advise deleting it; now nothing about another workspace's ports stands in the way.
     others = [
       { ...initialWorkspace, name: 'bob-mail', host_port: 3302, owner: 'bob', created_by: 'bob' },
-      { ...initialWorkspace, name: 'old-mail', host_port: 3303, owner: '', created_by: '' },
     ];
     await dashboard();
     await page.locator('#btn-backups').click();
-    const said = async (holder: string): Promise<string> => {
-      held = { name: holder, ports: [8025] };
-      await page.locator('#detail button', { hasText: 'restore as new' }).click();
-      await page.locator('#restore-dialog[open]').waitFor({ state: 'visible' });
-      const text = (await page.locator('#restore-held').textContent()) ?? '';
-      await page.locator('#restore-cancel').click();
-      return text;
-    };
-    const colleague = await said('bob-mail');
-    expect(colleague).toContain('On this server a port serves one workspace at a time');
-    expect(colleague).toContain('bob-mail belongs to bob.');
-    expect(colleague).toContain('ask bob whether bob-mail is still needed');
-    expect(colleague).not.toContain('delete bob-mail');
-    const own = await said('admin-ticket');
-    expect(own).toContain('admin-ticket belongs to you.');
-    expect(own).toContain('delete admin-ticket (that deletes its data)');
-    const nobody = await said('old-mail');
-    expect(nobody).not.toContain('belongs to');
-    expect(nobody).toContain('if it is yours, delete old-mail (that deletes its data)');
+    await page.locator('#detail button', { hasText: 'restore as new' }).click();
+    await page.locator('#restore-dialog[open]').waitFor({ state: 'visible' });
+    const said = (await page.locator('#restore-dialog').textContent()) ?? '';
+    expect(said).not.toContain('bob-mail');
+    expect(said).not.toContain('8025');
+    expect(await page.locator('#restore-go').isDisabled()).toBe(false);
+    await page.locator('#restore-cancel').click();
     expect(mutations).toBe(0);
   });
 
@@ -346,35 +330,29 @@ describe('live re-verification GUI regressions', () => {
     ]);
   });
 
-  test("restore into a colleague's workspace is shown disabled, saying who can", async () => {
+  test("restore as new of a colleague's backup is shown disabled, saying who can", async () => {
     // The server refuses anyone but the bundle's owner or an admin; the dialog offered the
-    // button and the advice anyway, and the click was refused.
+    // Restore button anyway, and the click was refused.
     role = 'member';
     user = 'carol';
     workspace = { ...initialWorkspace, name: 'bob-ticket', owner: 'bob', created_by: 'bob' };
-    others = [{ ...initialWorkspace, name: 'bob-mail', host_port: 3302, owner: 'bob' }];
     await dashboard('carol');
     await page.locator('#btn-backups').click();
-    held = { name: 'bob-mail', ports: [8025] };
     refusal = "this backup is bob's data — only bob or an admin can use or delete it";
     await page.locator('#detail button', { hasText: 'restore as new' }).click();
     await page.locator('#restore-dialog[open]').waitFor({ state: 'visible' });
-    const into = page.locator('#restore-into');
-    expect(await into.isVisible()).toBe(true);
-    expect(await into.isDisabled()).toBe(true);
-    expect(await into.getAttribute('title')).toBe(
+    const go = page.locator('#restore-go');
+    expect(await go.isDisabled()).toBe(true);
+    expect(await go.getAttribute('title')).toBe(
       "This backup is bob's data — only bob or an admin can use or delete it.",
     );
-    expect(await page.locator('#restore-held').textContent()).not.toContain('restore into');
     await page.locator('#restore-cancel').click();
     // The server's answer for the bundle's owner or an admin: offered as before.
     refusal = '';
     await page.locator('#detail button', { hasText: 'restore as new' }).click();
     await page.locator('#restore-dialog[open]').waitFor({ state: 'visible' });
-    expect(await into.isDisabled()).toBe(false);
-    expect(await page.locator('#restore-held').textContent()).toContain(
-      'restore into bob-ticket',
-    );
+    expect(await go.isDisabled()).toBe(false);
+    expect(await go.getAttribute('title')).toBe('');
     expect(mutations).toBe(0);
   });
 

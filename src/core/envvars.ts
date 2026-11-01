@@ -333,6 +333,17 @@ export async function composeEnvironment(
 }
 
 /**
+ * The overrides that are removals (`env --unset` records the key as null). `overrides` keeps
+ * listing them, as earlier releases did; a reader that says "your overrides" leaves these out,
+ * or an unset key was still named as one (live matrix 2026-10-30, F1).
+ */
+function removedKeys(overrides: Bag): string[] {
+  return Object.keys(overrides)
+    .filter((key) => overrides[key] === null)
+    .sort();
+}
+
+/**
  * The RC service's effective environment, credentials masked, plus which keys are user
  * overrides — so a caller can show what was changed versus inherited.
  *
@@ -369,6 +380,7 @@ export async function current(name: string): Promise<Bag> {
           override: Object.hasOwn(overrides, key),
         })),
       overrides: Object.keys(overrides).sort(),
+      removed: removedKeys(overrides),
     };
   }
   const { env, overrides } = await composeEnvironment(meta, target);
@@ -377,6 +389,7 @@ export async function current(name: string): Promise<Bag> {
     name: target,
     env: rows,
     overrides: Object.keys(overrides).sort(),
+    removed: removedKeys(overrides),
     // The keys the workspace records and is not running. Empty when there are none AND
     // when the container could not be read — `live_read` says which.
     drift,

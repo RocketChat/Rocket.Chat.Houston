@@ -19,18 +19,18 @@
 import * as config from '../config';
 
 import { guide } from './guides';
-import { k8sManifests, presetPort, presetPorts, truthyParam } from './common';
+import { k8sManifests, presetPort, truthyParam } from './common';
 import { type Params, register } from './registry';
 import { emptyPreset, type Preset } from './types';
 
-/** Web UI + API; SMTP :1025 stays compose-internal. */
-const MAILPIT_WEB_PORT = presetPort('email');
+/** Mailpit's web UI + API inside its container; SMTP :1025 stays compose-internal. */
+const MAILPIT_WEB_PORT = 8025;
 const SMTP_PORT = 1025;
 const FROM = 'rocketchat@example.com';
 const IMAGE = 'docker.io/axllent/mailpit:v1.20';
 
-/** Compose service for the SMTP sink and its browser inbox. */
-function mailpitService(): Record<string, Record<string, unknown>> {
+/** Compose service for the SMTP sink and its browser inbox, published on `webPort`. */
+function mailpitService(webPort: number): Record<string, Record<string, unknown>> {
   return {
     mailpit: {
       // Multi-arch (amd64/arm64) -- native on Apple Silicon.
@@ -41,7 +41,7 @@ function mailpitService(): Record<string, Record<string, unknown>> {
         MP_SMTP_AUTH_ACCEPT_ANY: '1',
         MP_SMTP_AUTH_ALLOW_INSECURE: '1',
       },
-      ports: [`${String(MAILPIT_WEB_PORT)}:8025`],
+      ports: [`${String(webPort)}:${String(MAILPIT_WEB_PORT)}`],
     },
   };
 }
@@ -63,31 +63,32 @@ function smtpSettings(verification: boolean): Record<string, string> {
   return env;
 }
 
-/** The Mailpit workload and both of its in-cluster ports. */
-function mailpitManifests(): string {
+/** The Mailpit workload and both of its in-cluster ports; the inbox forwarded to `webPort`. */
+function mailpitManifests(webPort: number): string {
   return k8sManifests({
     name: 'mailpit',
     image: IMAGE,
     ports: [
-      [MAILPIT_WEB_PORT, 8025],
+      [webPort, MAILPIT_WEB_PORT],
       [1025, 1025],
     ],
     env: { MP_SMTP_AUTH_ACCEPT_ANY: '1', MP_SMTP_AUTH_ALLOW_INSECURE: '1' },
     // Only the web UI is published to the host; SMTP is reached in-cluster by
     // Rocket.Chat, exactly as it is over the compose network.
     readiness: {
-      httpGet: { path: '/', port: 8025 },
+      httpGet: { path: '/', port: MAILPIT_WEB_PORT },
       initialDelaySeconds: 3,
       periodSeconds: 3,
       failureThreshold: 40,
     },
-    ui: { mailpit: [MAILPIT_WEB_PORT, 8025] },
+    ui: { mailpit: [webPort, MAILPIT_WEB_PORT] },
   });
 }
 
-export function build(params: Params): Preset {
+export function build(params: Params, ports: config.PortMap): Preset {
   const verification = truthyParam(params, 'verification');
-  const mailpitUrl = `http://localhost:${String(MAILPIT_WEB_PORT)}`;
+  const webPort = presetPort('email', 0, ports);
+  const mailpitUrl = `http://localhost:${String(webPort)}`;
   return {
     ...emptyPreset('email'),
     description:
@@ -98,7 +99,7 @@ export function build(params: Params): Preset {
       `otherwise at ${mailpitUrl} on the machine running houston. ` +
       'Pair with --seed for users with verified emails.',
     env: smtpSettings(verification),
-    services: mailpitService(),
+    services: mailpitService(webPort),
     dependsOn: ['mailpit'],
     requiresLicense: false,
     source: 'built-in (dynamic)',
@@ -106,8 +107,8 @@ export function build(params: Params): Preset {
       verification: 'require email verification on new accounts (default false)',
     },
     extra: { [config.EXTRA_MAILPIT_URL]: mailpitUrl },
-    ports: [...presetPorts('email')],
-    kubernetesManifests: [mailpitManifests()],
+    ports: [webPort],
+    kubernetesManifests: [mailpitManifests(webPort)],
     guides: [
       guide('email', {
         summary:

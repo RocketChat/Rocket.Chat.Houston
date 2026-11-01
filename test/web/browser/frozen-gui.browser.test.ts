@@ -458,7 +458,7 @@ const CASES: readonly BrowserCase[] = [
   ],
   [
     'surfaces rail',
-    'restore as new says before it starts that the side ports are taken and what works',
+    'restore as new is offered while the source still holds the side ports it would use',
   ],
   ['surfaces rail', 'an upgraded workspace rolls back behind a red confirm and the panel follows'],
   [
@@ -485,7 +485,10 @@ const CASES: readonly BrowserCase[] = [
 // Re-recorded when "an https workspace read from another computer shows its public address" and
 // "a localhost workspace read from another computer says where its links open" joined: the
 // overview names the address Open RC follows, and a remote reader is told where localhost is.
-const CASES_DIGEST = '007b7e961dac3869e53cb8807d76ee6a60a7c2128e63d11565e0225c5be3e176';
+// Re-recorded when "restore as new says before it starts that the side ports are taken and what
+// works" became "restore as new is offered while the source still holds the side ports it would
+// use": a copy is given side ports of its own, so no holder stands in its way.
+const CASES_DIGEST = '899739a1784d8f913035e6e63faceb04bc35e3da6eb5ba037f76fd08172e8779';
 const caseIds = CASES.map(([file, name]) => `${file}: ${name}`);
 const casesDigest = crypto.createHash('sha256').update(JSON.stringify(CASES)).digest('hex');
 if (CASES.length !== 194 || new Set(caseIds).size !== 194 || casesDigest !== CASES_DIGEST) {
@@ -3913,9 +3916,9 @@ async function prepareSurface(name: string): Promise<void> {
     ]);
   }
   if (
-    name === 'restore as new says before it starts that the side ports are taken and what works'
+    name === 'restore as new is offered while the source still holds the side ports it would use'
   ) {
-    // The source still exists and still holds the port its scenario publishes.
+    // The source still exists and still holds the preferred port its scenario publishes.
     await realRecord.write(
       'mail-src',
       'services: {}\n',
@@ -6632,7 +6635,6 @@ async function exerciseSurface(name: string, page: Page): Promise<void> {
     expect(await kept.textContent()).not.toContain('deleted');
     await gone.getByRole('button', { name: 'restore as new' }).click();
     await page.locator('#restore-dialog[open]').waitFor({ state: 'visible' });
-    expect(await page.locator('#restore-held').isVisible()).toBe(false);
     await page.locator('#restore-go').click();
     await page.waitForFunction(() => document.querySelector('#job-title')?.textContent === 'Done');
     expect(mockRestore).toHaveBeenCalledWith(
@@ -6649,22 +6651,24 @@ async function exerciseSurface(name: string, page: Page): Promise<void> {
     return;
   }
   if (
-    name === 'restore as new says before it starts that the side ports are taken and what works'
+    name === 'restore as new is offered while the source still holds the side ports it would use'
   ) {
+    // The copy is given side ports of its own, so the source still holding 8025 is not in
+    // its way: the dialog offers the restore, and names no holder.
     await openWorkspace(page, 'mail-src');
     await page.locator('#detail .tab', { hasText: 'Backups' }).click();
     await page.locator('#d-body button', { hasText: 'as new' }).click();
     await page.locator('#restore-dialog[open]').waitFor({ state: 'visible' });
-    const held = (await page.locator('#restore-held').textContent()) ?? '';
-    expect(await page.locator('#restore-held').isVisible()).toBe(true);
-    expect(held).toContain('mail-src already publishes port 8025');
-    expect(held).toContain('restore into mail-src, which replaces its data');
-    expect(held).toContain('restore this backup as new from Backups');
-    expect(held).not.toContain('houston');
-    expect(await page.locator('#restore-go').isDisabled()).toBe(true);
-    expect(await page.locator('#restore-into').textContent()).toBe('Restore into mail-src instead');
-    await page.locator('#restore-cancel').click();
-    expect(mockRestore).not.toHaveBeenCalled();
+    expect(await page.locator('#restore-dialog').textContent()).not.toContain('8025');
+    expect(await page.locator('#restore-go').isDisabled()).toBe(false);
+    await page.locator('#restore-go').click();
+    await page.waitForFunction(() => document.querySelector('#job-title')?.textContent === 'Done');
+    expect(mockRestore).toHaveBeenCalledWith(
+      expect.stringContaining('mail-src-2026-10-09.rcbak'),
+      expect.objectContaining({ new: true, name: '' }),
+    );
+    // The job's stream has ended once its result is announced.
+    await page.locator('#toasts .toast', { hasText: 'restored' }).waitFor({ state: 'visible' });
     return;
   }
   if (name === 'an upgraded workspace rolls back behind a red confirm and the panel follows') {
@@ -6975,6 +6979,8 @@ describe('the frozen GUI against the in-process Fastify server', () => {
           name === 'a finished restore re-reads the workspace without a page error' ||
           name ===
             'every backup on the machine is listed and a deleted workspaces restores as new' ||
+          name ===
+            'restore as new is offered while the source still holds the side ports it would use' ||
           name === 'an upgraded workspace rolls back behind a red confirm and the panel follows' ||
           name ===
             'take down keeps the data, delete asks for the name, and both say what they remove') &&

@@ -656,3 +656,42 @@ describe('the directory itself', () => {
     }
   });
 });
+
+describe('a re-up that changes the directory seed', () => {
+  // slapd reads its seed once and keeps its entries in the pod, and a ConfigMap edit restarts
+  // nothing: a Kubernetes re-up with `--set users=9` recorded 9 and kept serving 5 (live
+  // 2026-10-31). The pod template carries the seed's hash, so a changed seed rolls it.
+  const seedOf = (params: Record<string, unknown>): string | undefined => {
+    const docs = resolve('ldap', 'kubernetes', params).kubernetesManifests.flatMap((manifest) =>
+      safeLoadAll(manifest),
+    ) as {
+      kind: string;
+      metadata: { name: string };
+      spec?: { template: { metadata: { annotations?: Record<string, string> } } };
+    }[];
+    // The directory's own Deployment: `openldap`, or AD's Samba.
+    const deployment = docs.find(
+      (d) => d.kind === 'Deployment' && d.metadata.name !== 'phpldapadmin',
+    );
+    if (deployment === undefined) throw new Error('no directory Deployment');
+    return deployment.spec?.template.metadata.annotations?.['houston.io/seed'];
+  };
+
+  it('rolls the directory when the seed changes, and only then', () => {
+    expect(seedOf({})).toBeUndefined();
+    expect(seedOf({ users: '5' })).toBeUndefined();
+    const nine = seedOf({ users: '9' });
+    expect(nine).toMatch(/^[0-9a-f]{16}$/u);
+    expect(seedOf({ users: '9' })).toBe(nine);
+    expect(seedOf({ groups: 'on' })).not.toBe(nine);
+    expect(seedOf({ groups: 'on' })).toMatch(/^[0-9a-f]{16}$/u);
+  });
+
+  it('leaves AD and a generated directory alone, whose counts already roll them', () => {
+    // Their seeds are fixed scripts: a stamp would be one constant, rolling a 2.1.6 workspace
+    // once for nothing -- and an AD rolled re-provisions with new objectGUIDs (review 2026-10-31).
+    expect(seedOf({ directory: 'ad' })).toBeUndefined();
+    expect(seedOf({ directory: 'ad', users: '9' })).toBeUndefined();
+    expect(seedOf({ users: '600' })).toBeUndefined();
+  });
+});

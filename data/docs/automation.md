@@ -23,7 +23,7 @@ On a shared machine, set `HOUSTON_USER=<account>` so the audit log names who ran
 `skill` take `--json`; `capabilities` always prints JSON. Every reply is one envelope:
 
 ```json
-{"schema":"houston.info.v1","contract":2,"houston_version":"2.1.6",
+{"schema":"houston.info.v1","contract":2,"houston_version":"2.1.7",
  "generated_at":"…","ok":true,"data":{…},"warnings":[],"error":null}
 ```
 

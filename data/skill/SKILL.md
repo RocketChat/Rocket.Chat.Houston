@@ -94,8 +94,9 @@ to try, or a pull request to check:
   in front: `lucy-issue-1234`. Later commands accept the name you typed as well, and
   `data.name` from the `up` reply is the name to report. Build a new name (`<n>-ldap`)
   from the name you chose, not from `data.name`, or the owner prefix is applied twice.
-- **An existing name is reused exactly as it was.** A different version or preset is
-  ignored, with a `VERSION_IGNORED_ON_REUSE` warning in the reply. A new preset needs a
+- **An existing name is reused exactly as it was.** A different version, preset, port,
+  `--set` or other flag is ignored, with a `VERSION_IGNORED_ON_REUSE` warning in the reply
+  naming each. A new preset needs a
   new name; a new version means `upgrade`.
 
 ### Versions
@@ -140,12 +141,12 @@ From `houston info --name <n> --json`:
   `down --volumes`, `prune` and `cluster delete` ask for confirmation; pass `--yes` only
   once the person has agreed, or for a workspace you started for your own checks;
 - stopping or removing a workspace the person asked for, even one you created, for instance
-  to free a port: two workspaces with the same `ldap`, `saml`, `oidc`, `email`, `s3_minio`
-  or `livechat` preset cannot run at once, because its side service holds a fixed port that
-  stopping does not free, and the second `up` exits 8 naming the workspace that holds it.
-  Two `voice` workspaces with `sip_integration=on` clash the same way on their RTP ports: give
-  the second its own range with `--set rtp_ports=21000-21046` rather than removing the first.
-  Only one with `pbx=on` can run per machine;
+  to free a port. There is none to free for a second workspace with the same `ldap`,
+  `saml`, `oidc`, `email`, `s3_minio` or `livechat` preset: its side service gets the next
+  free port, and `houston info` gives its addresses. Two `voice` workspaces with
+  `sip_integration=on` clash on their RTP ports, whose numbers phones dial: give the second
+  its own range with `--set rtp_ports=21000-21046` rather than removing the first. Only one
+  with `pbx=on` can run per machine;
 - exit 6: show `error.gate.approve_with` to the person, never run it yourself;
 - `houston trust-ca`, or editing `/etc/hosts`.
 
@@ -185,7 +186,7 @@ From `houston info --name <n> --json`:
 Every `--json` reply is one envelope:
 
 ```json
-{"schema":"houston.info.v1","contract":2,"houston_version":"2.1.6",
+{"schema":"houston.info.v1","contract":2,"houston_version":"2.1.7",
  "generated_at":"...","ok":true,"data":{...},"warnings":[],"error":null}
 ```
 

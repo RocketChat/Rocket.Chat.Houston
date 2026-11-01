@@ -23,10 +23,11 @@
  *               (default false; needs the /etc/hosts line).
  *   bucket      bucket name (default houston-uploads).
  */
+import type { PortMap } from '../config';
 import { shownValue } from '../format';
 
 import { guide } from './guides';
-import { k8sManifests, presetPort, presetPorts, safeDump, strParam, truthyParam } from './common';
+import { k8sManifests, presetPort, safeDump, strParam, truthyParam } from './common';
 import { type Params, register } from './registry';
 import { emptyPreset, type Preset } from './types';
 
@@ -42,11 +43,11 @@ import { emptyPreset, type Preset } from './types';
 const BUCKET_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]\n?$/u;
 
 /**
- * S3 API -- same inside and published, so presigned URLs are valid from the browser (via
- * /etc/hosts) and RC alike. Console is the second registry port.
+ * What MinIO's S3 API listens on when told nothing. Both of its ports are the SAME inside the
+ * container and on the host: Rocket.Chat and (presigned) the browser follow one BucketURL, so
+ * a workspace given another API port must make MinIO listen there (`serverArgs`).
  */
-const S3_PORT = presetPort('s3_minio', 0);
-const CONSOLE_PORT = presetPort('s3_minio', 1);
+const MINIO_DEFAULT_API_PORT = 9000;
 const USER = 'houston';
 /** MinIO requires >= 8 chars; throwaway repro creds. */
 const PASSWORD = 'houston-secret';
@@ -70,7 +71,7 @@ const MC_TAG = 'RELEASE.2026-08-04T00-00-00Z';
  * container, so it would wait for a MinIO that cannot start until it finishes. Same
  * image, same idempotent `mc mb -p`, same wait loop as Compose.
  */
-function bucketJob(bucket: string, workspace = '__HOUSTON_NAME__'): string {
+function bucketJob(bucket: string, s3Port: number, workspace = '__HOUSTON_NAME__'): string {
   const app = 'houston-minio-init';
   const labels: Record<string, string> = {
     app,
@@ -97,7 +98,7 @@ function bucketJob(bucket: string, workspace = '__HOUSTON_NAME__'): string {
               command: [
                 'sh',
                 '-c',
-                `until mc alias set local http://minio:${String(S3_PORT)} ` +
+                `until mc alias set local http://minio:${String(s3Port)} ` +
                   `${USER} ${PASSWORD}; do sleep 2; done; ` +
                   `mc mb -p local/${bucket}`,
               ],
@@ -110,9 +111,14 @@ function bucketJob(bucket: string, workspace = '__HOUSTON_NAME__'): string {
 }
 
 /** What a presigned-URL setup needs the reader to know, and the proxy it wants. */
-function presignedNotes(bucket: string, presigned: boolean, s3Host: string): string[] {
+function presignedNotes(
+  bucket: string,
+  presigned: boolean,
+  s3Host: string,
+  [s3Port, consolePort]: readonly [number, number],
+): string[] {
   const notes = [
-    `MinIO console: http://localhost:${String(CONSOLE_PORT)}  (${USER} / ${PASSWORD})`,
+    `MinIO console: http://localhost:${String(consolePort)}  (${USER} / ${PASSWORD})`,
     `  — bucket '${bucket}' is created automatically; watch uploads land in it.`,
     'Upload any file/image in RC; it goes to MinIO instead of GridFS.',
   ];
@@ -129,7 +135,7 @@ function presignedNotes(bucket: string, presigned: boolean, s3Host: string): str
   } else if (presigned) {
     notes.push(
       'PRESIGNED MODE: the browser fetches files straight from ' +
-        `http://${s3Host}:${String(S3_PORT)}, so no hosts entry is needed — but that`,
+        `http://${s3Host}:${String(s3Port)}, so no hosts entry is needed — but that`,
       '  address must be reachable from the browser (`--bind 0.0.0.0`).',
       "Point s3_host somewhere unreachable to reproduce the classic 'presigned",
       "  URL unreachable' ticket symptom (uploads work, previews break).",
@@ -144,7 +150,12 @@ function presignedNotes(bucket: string, presigned: boolean, s3Host: string): str
 }
 
 /** Every Rocket.Chat setting that points file uploads at this bucket. */
-function s3Settings(bucket: string, presigned: boolean, s3Host: string): Record<string, string> {
+function s3Settings(
+  bucket: string,
+  presigned: boolean,
+  s3Host: string,
+  s3Port: number,
+): Record<string, string> {
   return {
     OVERWRITE_SETTING_FileUpload_Storage_Type: 'AmazonS3',
     OVERWRITE_SETTING_FileUpload_S3_Bucket: bucket,
@@ -160,7 +171,7 @@ function s3Settings(bucket: string, presigned: boolean, s3Host: string): Record<
     // Both upload successfully -- MinIO is happy to treat it as a prefix -- which is why
     // this went unnoticed. It is still every object nested one level deeper than it
     // should be, under a directory named after its own bucket.
-    OVERWRITE_SETTING_FileUpload_S3_BucketURL: `http://${s3Host}:${String(S3_PORT)}`,
+    OVERWRITE_SETTING_FileUpload_S3_BucketURL: `http://${s3Host}:${String(s3Port)}`,
     OVERWRITE_SETTING_FileUpload_S3_AWSAccessKeyId: USER,
     OVERWRITE_SETTING_FileUpload_S3_AWSSecretAccessKey: PASSWORD,
     OVERWRITE_SETTING_FileUpload_S3_Region: 'us-east-1', // MinIO default
@@ -187,17 +198,31 @@ function s3Settings(bucket: string, presigned: boolean, s3Host: string): Record<
   };
 }
 
+/**
+ * `minio server`'s arguments: the console on its port, and the S3 API on its own only when that
+ * is not MinIO's default, so a workspace on the preferred ports runs the command it always did.
+ */
+function serverArgs(s3Port: number, consolePort: number): string[] {
+  return [
+    'server',
+    '/data',
+    '--console-address',
+    `:${String(consolePort)}`,
+    ...(s3Port === MINIO_DEFAULT_API_PORT ? [] : ['--address', `:${String(s3Port)}`]),
+  ];
+}
+
 /** The same MinIO as native Kubernetes resources. */
-function minioManifests(): string {
+function minioManifests(s3Port: number, consolePort: number): string {
   return k8sManifests({
     name: 'minio',
     image: `docker.io/pgsty/minio:${MINIO_TAG}`,
     ports: [
-      [S3_PORT, S3_PORT],
-      [CONSOLE_PORT, CONSOLE_PORT],
+      [s3Port, s3Port],
+      [consolePort, consolePort],
     ],
     env: { MINIO_ROOT_USER: USER, MINIO_ROOT_PASSWORD: PASSWORD },
-    args: ['server', '/data', '--console-address', `:${String(CONSOLE_PORT)}`],
+    args: serverArgs(s3Port, consolePort),
     // The bucket is a directory in here, so keeping /data keeps it too: the one-shot
     // `minio-init` Job never runs again, and nothing else would recreate it.
     data: { path: '/data', size: '2Gi' },
@@ -206,33 +231,37 @@ function minioManifests(): string {
     // names the workload through `houston.io/ui-deployment` instead of carrying a list of
     // ports it is not allowed to spell.
     readiness: {
-      httpGet: { path: '/minio/health/ready', port: S3_PORT },
+      httpGet: { path: '/minio/health/ready', port: s3Port },
       initialDelaySeconds: 3,
       periodSeconds: 3,
       failureThreshold: 40,
     },
     ui: {
-      minio: [S3_PORT, S3_PORT],
-      'minio-console': [CONSOLE_PORT, CONSOLE_PORT],
+      minio: [s3Port, s3Port],
+      'minio-console': [consolePort, consolePort],
     },
   });
 }
 
 /** MinIO and its console, as compose services. */
-function minioServices(bucket: string): Record<string, Record<string, unknown>> {
+function minioServices(
+  bucket: string,
+  s3Port: number,
+  consolePort: number,
+): Record<string, Record<string, unknown>> {
   return {
     minio: {
       image: `docker.io/pgsty/minio:${MINIO_TAG}`,
       restart: 'unless-stopped',
-      command: ['server', '/data', '--console-address', `:${String(CONSOLE_PORT)}`],
+      command: serverArgs(s3Port, consolePort),
       environment: {
         MINIO_ROOT_USER: USER,
         MINIO_ROOT_PASSWORD: PASSWORD,
       },
       volumes: ['minio_data:/data'],
       ports: [
-        `${String(S3_PORT)}:${String(S3_PORT)}`,
-        `${String(CONSOLE_PORT)}:${String(CONSOLE_PORT)}`,
+        `${String(s3Port)}:${String(s3Port)}`,
+        `${String(consolePort)}:${String(consolePort)}`,
       ],
     },
     // One-shot: wait for MinIO to accept connections, then create the bucket. `mc mb -p`
@@ -246,15 +275,17 @@ function minioServices(bucket: string): Record<string, Record<string, unknown>> 
       entrypoint: [
         'sh',
         '-c',
-        `until mc alias set local http://minio:${String(S3_PORT)} ${USER} ${PASSWORD} && ` +
+        `until mc alias set local http://minio:${String(s3Port)} ${USER} ${PASSWORD} && ` +
           `mc mb -p local/${bucket}; do sleep 1; done`,
       ],
     },
   };
 }
 
-export function build(params: Params): Preset {
+export function build(params: Params, ports: PortMap): Preset {
   const presigned = truthyParam(params, 'presigned');
+  const s3Port = presetPort('s3_minio', 0, ports);
+  const consolePort = presetPort('s3_minio', 1, ports);
   // THE BROWSER'S ADDRESS FOR MINIO, in presigned mode only. A presigned URL is followed
   // by the browser, and `minio` resolves for it solely through the `127.0.0.1 minio` hosts
   // line below -- which names whichever machine the browser is on. Right on a laptop;
@@ -278,10 +309,10 @@ export function build(params: Params): Preset {
     ...emptyPreset('s3_minio'),
     description:
       "MinIO S3-compatible storage wired as RC's file upload backend " +
-      `(bucket '${bucket}', console :${String(CONSOLE_PORT)}). Default proxies ` +
+      `(bucket '${bucket}', console :${String(consolePort)}). Default proxies ` +
       'downloads through RC; turn on Presigned URLs (--set presigned=true) for real ones.',
-    env: s3Settings(bucket, presigned, s3Host),
-    services: minioServices(bucket),
+    env: s3Settings(bucket, presigned, s3Host, s3Port),
+    services: minioServices(bucket, s3Port, consolePort),
     dependsOn: ['minio'],
     requiresLicense: false,
     source: 'built-in (dynamic)',
@@ -294,12 +325,12 @@ export function build(params: Params): Preset {
         'for a browser on the machine running houston)',
     },
     volumes: { minio_data: { driver: 'local' } },
-    ports: [...presetPorts('s3_minio')],
+    ports: [s3Port, consolePort],
     // Both: the Deployment/Services for MinIO, and the Job that creates the bucket.
     // Without the second, `up` succeeded, MinIO ran, and every upload had nowhere to land
     // -- see `bucketJob`.
-    kubernetesManifests: [minioManifests(), bucketJob(bucket)],
-    notes: presignedNotes(bucket, presigned, s3Host),
+    kubernetesManifests: [minioManifests(s3Port, consolePort), bucketJob(bucket, s3Port)],
+    notes: presignedNotes(bucket, presigned, s3Host, [s3Port, consolePort]),
     guides: [
       guide('s3_minio', {
         summary: `MinIO as the file upload store, bucket '${bucket}'${presigned ? ', presigned URLs' : ''}.`,
@@ -323,7 +354,7 @@ export function build(params: Params): Preset {
               ]
             : presigned
               ? [
-                  `The browser fetches files straight from http://${s3Host}:${String(S3_PORT)}, which must be reachable from it (--bind 0.0.0.0).`,
+                  `The browser fetches files straight from http://${s3Host}:${String(s3Port)}, which must be reachable from it (--bind 0.0.0.0).`,
                   "Point s3_host somewhere unreachable to reproduce the classic 'presigned URL unreachable' symptom: uploads work, previews break.",
                 ]
               : [

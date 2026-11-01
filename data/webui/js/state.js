@@ -234,7 +234,9 @@ async function openScenarios() {
     card.append(inner);
     const foot = ctx.el("div", { class: "scen-f" },
       ctx.el("span", {}, s.ports && s.ports.length
-        ? "Extra ports: " + s.ports.join(", ") : "No extra ports"));
+        ? (s.ports.length > 1 ? "Prefers ports " : "Prefers port ") + s.ports.join(", ")
+          + (s.ports.length > 1 ? ", or the next free ones" : ", or the next free one")
+        : "No extra ports"));
     if (ctx.canWrite()) {
       foot.append(ctx.el("button", { class: "btn small", onclick: () => ctx.openCreate(s.name) },
         "Create a workspace with this"));

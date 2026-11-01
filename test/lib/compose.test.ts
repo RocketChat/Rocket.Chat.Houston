@@ -414,6 +414,12 @@ describe('the monitoring add-on', () => {
     expect(doc.services['node-exporter']).not.toHaveProperty('ports');
     expect(doc.services['mongodb-exporter']).not.toHaveProperty('ports');
   });
+
+  it("publishes a second monitored workspace's Prometheus and Grafana on the ports it was given", () => {
+    const doc = build(official({ monitoring: true, monitorPorts: [9091, 5051] }));
+    expect(doc.services.prometheus?.ports).toEqual(['127.0.0.1:9091:9090']);
+    expect(doc.services.grafana?.ports).toEqual(['127.0.0.1:5051:3000']);
+  });
 });
 
 describe('TLS', () => {

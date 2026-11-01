@@ -387,18 +387,15 @@
     </form>
   </dialog>
 
-  <!-- Restore a backup as a NEW workspace. The server is asked first whether another
-       workspace holds the side ports the backup's scenario publishes (one per box): if one
-       does the restore would be refused, so that is said here, with what works instead,
-       before anything starts. -->
+  <!-- Restore a backup as a NEW workspace. The server is asked first whether this viewer may
+       use the bundle (its owner or an admin), so the dialog says who can before a click is
+       refused. The copy gets side ports of its own. -->
   <dialog id="restore-dialog">
     <form id="restore-form" method="dialog">
       <h2>Restore as a new workspace</h2>
       <p class="hint" id="restore-what"></p>
-      <p class="banner warn" id="restore-held" hidden></p>
       <menu>
         <button type="button" id="restore-cancel" class="btn">Cancel</button>
-        <button type="button" id="restore-into" class="btn" hidden></button>
         <button type="button" id="restore-go" class="btn primary">Restore</button>
       </menu>
     </form>

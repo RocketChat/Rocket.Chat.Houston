@@ -17,13 +17,16 @@ import {
   adminPass,
   externalUrl,
   fromDocument,
+  grafanaPortOf,
   listMeta,
   metadata,
   projectName,
+  prometheusPortOf,
   rcServices,
   readCompose,
   readMeta,
   recorded,
+  sidePortsOf,
   toDocument,
   updateMeta,
   write,
@@ -432,6 +435,44 @@ describe('the repro.json format', () => {
     );
     expect(adminPass(sample())).toBe(config.ADMIN_PASSWORD);
     expect(adminPass(sample({ adminPassword: 'generated' }))).toBe('generated');
+  });
+});
+
+describe("a workspace's own side and monitoring ports", () => {
+  it('are what moved, and the preferred ones for everything else and every older record', () => {
+    expect(sidePortsOf(sample())).toEqual({});
+    expect(sidePortsOf(sample({ extra: { side_ports: { email: [8026] } } }))).toEqual({
+      email: [8026],
+    });
+    // A record written before ports could move, or with nothing in `extra` at all.
+    expect(sidePortsOf(sample({ extra: null as unknown as Record<string, unknown> }))).toEqual({});
+    expect([grafanaPortOf(sample()), prometheusPortOf(sample())]).toEqual([5050, 9090]);
+  });
+
+  it('read monitoring by position: Docker records the pair, Kubernetes only Grafana', () => {
+    const docker = sample({ extra: { monitoring_ports: [9091, 5051] } });
+    expect([prometheusPortOf(docker), grafanaPortOf(docker)]).toEqual([9091, 5051]);
+    const kube = sample({ extra: { monitoring_ports: [5051] } });
+    expect([prometheusPortOf(kube), grafanaPortOf(kube)]).toEqual([9090, 5051]);
+  });
+
+  it('drop what a hand-edited record could not mean, rather than linking to it', () => {
+    // A record is a trust boundary: a nonsense entry falls back to the preferred port, never
+    // to an address built from whatever text was there.
+    const odd = sample({
+      extra: {
+        side_ports: {
+          email: [80],
+          ldap: ['8083'],
+          s3_minio: [9002],
+          nonsense: [8100],
+          saml: 'x',
+        },
+        monitoring_ports: [9091, 'grafana'],
+      },
+    });
+    expect(sidePortsOf(odd)).toEqual({ ldap: [8083] });
+    expect([prometheusPortOf(odd), grafanaPortOf(odd)]).toEqual([9090, 5050]);
   });
 });
 

@@ -254,8 +254,10 @@ describe('reading what a workspace is running', () => {
       ofRepro: async () => 'docker',
     }));
     const envvars = require('../../src/core/envvars') as typeof EnvvarsNS;
-    const mine = await envvars.current('s');
+    const { removed, ...mine } = await envvars.current('s');
     expect(mine).toEqual(RECORDED.current);
+    // The removal is named as one, so a reader can leave it out of "your overrides" (F1).
+    expect(removed).toEqual(['KEEP']);
     expect((mine.env as { key: string }[]).map((row) => row.key)).toEqual([
       'BLANK',
       'KEEP',

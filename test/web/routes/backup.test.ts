@@ -295,9 +295,10 @@ describe('compatibility', () => {
     expect(bare.json().compatibility).toBeNull();
   });
 
-  it('names who holds the side ports a restore as new would need, before anything starts', async () => {
-    // The as-new create was refused from a job that had already started, while the source
-    // still held its scenario's fixed ports. Asked without a target, the answer says so.
+  it('names no holder for a restore as new, which is given side ports of its own', async () => {
+    // The as-new create was refused while the source still held its scenario's ports, and
+    // this answer named the holder. A copy now gets the next free ports, so nobody is in the
+    // way: the answer is the manifest and whether this viewer may use it.
     const real = jest.requireActual<typeof RecordNS>('../../../src/core/runner/record');
     await real.write(
       'mail-src',
@@ -305,12 +306,10 @@ describe('compatibility', () => {
       real.metadata({ name: 'mail-src', extra: { sidecar_ports: [8025, 8082] } }),
     );
     jest.mocked(backup.readManifest).mockResolvedValueOnce({ preset: 'email+ldap' });
-    const held = await post('/api/backups/compatibility', { bundle: inside('a.rcbak') });
-    expect(held.statusCode).toBe(200);
-    expect(held.json().held).toEqual({ name: 'mail-src', ports: [8025, 8082] });
-    jest.mocked(backup.readManifest).mockResolvedValueOnce({ preset: 'saml' });
-    const free = await post('/api/backups/compatibility', { bundle: inside('b.rcbak') });
-    expect(free.json().held).toBeNull();
+    const answer = await post('/api/backups/compatibility', { bundle: inside('a.rcbak') });
+    expect(answer.statusCode).toBe(200);
+    expect(answer.json()).not.toHaveProperty('held');
+    expect(answer.json()).toMatchObject({ compatibility: null, refusal: '' });
   });
 
   it("says whether this viewer may use the bundle, so a colleague's restore is not offered", async () => {

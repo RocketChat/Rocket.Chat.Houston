@@ -12,12 +12,15 @@
  * check with teeth -- "these names must be registered or nothing is returned" -- stays
  * here, where it was.
  */
+import type { PortMap } from '../config';
+
 import type { Preset } from './types';
 
 /** `--set KEY=VALUE` params, as the raw strings they arrive as. */
 export type Params = Record<string, unknown>;
 
-export type Builder = (params: Params) => Preset;
+/** `ports`: the workspace's side ports, sparse over the registry (`common.presetPorts`). */
+export type Builder = (params: Params, ports: PortMap) => Preset;
 
 export const REGISTRY: Record<string, Builder> = {};
 

@@ -66,7 +66,6 @@ import {
   writeRecord,
 } from '../runner/record';
 import { atomicWrite, exists, remove as removeWorkspace, workspace } from '../runner/paths';
-import { portFree } from '../runner/ports';
 import { cleanup } from '../../seams/exec';
 import * as topology from '../topology';
 import { MODE_ACME } from '../tls';
@@ -138,6 +137,8 @@ export interface KubeCreate {
   root: string;
   microservices: boolean;
   presetForNotes: Preset | null;
+  /** The presets' moved side ports, sparse (`extra.side_ports`); `{}` when none moved. */
+  sidePorts: Record<string, number[]>;
   /** Local Grafana claims are published before its later monitoring attachment. */
   monitoringPorts: number[];
   pre: Preflight | null;
@@ -176,6 +177,7 @@ export function kubeCreate(
     root: '',
     microservices: false,
     presetForNotes: null,
+    sidePorts: {},
     monitoringPorts: [],
     pre: null,
     plan: null,
@@ -420,12 +422,32 @@ export async function resolvePairing(job: KubeCreate): Promise<void> {
   // curl in a ticket and the URL the user had just been shown all pointed at nothing.
   job.recorded = before === null ? 0 : Number(before.hostPort) || 0;
   job.wasPinned = before !== null && isTruthy(before.pinned);
-  const pre = requestedPreset(job);
   const publicMonitoring =
     Boolean(job.req.https || job.req.domain || job.req.acmeEmail) ||
     (job.req.monitor && (await tlsplan.tlsFromRecord(job.reproName)) !== null);
-  job.monitoringPorts = job.req.monitor && !publicMonitoring ? [config.MONITOR_PORTS[1]] : [];
-  if (job.monitoringPorts.length > 0) await claimMonitoringPorts(job);
+  // The side UIs' forwards, and the local Grafana's: preferred first, the next free port when
+  // another workspace holds one. A re-up keeps what its record holds -- its own live forwards
+  // hold those ports -- so its manifests render the same labels and nothing rolls.
+  const claim = await ports.claimSidePorts(
+    job.reproName,
+    requestedPreset(job),
+    (given) => requestedPreset(job, given),
+    {
+      monitoring: job.req.monitor && !publicMonitoring ? ['grafana'] : [],
+      reserve: job.req.port ? [job.req.port] : [],
+    },
+  );
+  for (const [whose, was, now] of claim.moved) {
+    warn(
+      job.emit,
+      `${whose}'s port ${String(was)} is claimed by another workspace now, so ` +
+        `'${job.reproName}' forwards it on ${String(now)}`,
+      { phase: 'plan' },
+    );
+  }
+  job.sidePorts = claim.side;
+  job.monitoringPorts = claim.monitoring;
+  const pre = claim.pre;
   // CHECKED, as Compose checks it, before anything is made. A port given here was taken on
   // trust: the whole workspace deployed, the forward then found the port held, and `up`
   // ended exit 8 with the workspace left running. The workspace's own recorded port stays
@@ -442,9 +464,12 @@ export async function resolvePairing(job: KubeCreate): Promise<void> {
   );
 }
 
-/** Resolve the actual scenario once, including ports added by its parameters. */
-function requestedPreset(job: KubeCreate): Preset {
-  if (job.presetForNotes !== null) return job.presetForNotes;
+/**
+ * Resolve the actual scenario once, including ports added by its parameters: on the registry's
+ * ports, which side ports are allocated from, until `ports` -- the ones allocated -- rebuilds it.
+ */
+function requestedPreset(job: KubeCreate, ports?: config.PortMap): Preset {
+  if (job.presetForNotes !== null && ports === undefined) return job.presetForNotes;
   const names = namesOf(job.req.preset || 'default');
   if (names.length > 1) {
     job.presetParams = request.paramsByPreset(names, job.req.params);
@@ -453,34 +478,18 @@ function requestedPreset(job: KubeCreate): Preset {
       job.presetParams,
       topology.KUBERNETES,
       new Set(Object.keys(job.envOverrides)),
+      ports ?? {},
     );
   } else {
     job.presetForNotes = presets.resolve(
       job.req.preset || 'default',
       topology.KUBERNETES,
       job.req.params,
+      ports ?? {},
     );
     request.refuseUnknownParams(job.req.params, job.presetForNotes, job.req.preset || 'default');
   }
   return job.presetForNotes;
-}
-
-/** Only the local Grafana forward is published; Prometheus stays in the cluster. */
-async function claimMonitoringPorts(job: KubeCreate): Promise<void> {
-  const held = await ports.sidecarHolder(job.monitoringPorts, job.reproName);
-  if (held !== null) {
-    throw new ConflictError(
-      `monitoring needs host port ${String(config.MONITOR_PORTS[1])}, already claimed by workspace '${held.name}'`,
-    );
-  }
-  const own = await ports.ownPorts(job.reproName);
-  for (const port of job.monitoringPorts) {
-    if (!own.has(port) && !(await portFree(port))) {
-      throw new ConflictError(
-        `monitoring needs host port ${String(port)}, already in use on this machine`,
-      );
-    }
-  }
 }
 
 /** How this workspace is reached and what shape it is, in Compose's own order. */
@@ -516,15 +525,10 @@ export function settleAddressing(job: KubeCreate): void {
 }
 
 /**
- * The preset's fixed side ports (phpLDAPadmin, Mailpit, Keycloak...), which this runtime
- * port-forwards on this machine. Refused up front and named, as Compose does, rather than a
- * second workspace's forward failing to bind. Only for a NEW workspace: a re-up keeps the
- * forwards it already holds, and records written before `sidecar_ports` was recorded here
- * do not list them.
+ * A directory served over LDAPS or StartTLS: its certificate, as a Secret beside it. (Its side
+ * ports were given in `resolvePairing`, which this runtime port-forwards on this machine.)
  */
-export async function claimSidecarPorts(job: KubeCreate): Promise<void> {
-  if (!job.reused) await ports.checkSidecarPorts(job.presetForNotes as Preset, job.reproName);
-  // A directory served over LDAPS or StartTLS: its certificate, as a Secret beside it.
+export async function certifyTheDirectory(job: KubeCreate): Promise<void> {
   const pre = job.presetForNotes as Preset;
   if (pre.extra.directory_tls !== undefined) {
     job.presetForNotes = withCertificate(
@@ -709,6 +713,7 @@ export async function writeProvisionalRecord(job: KubeCreate): Promise<void> {
   // Claimed from the write-ahead record on, so a concurrent create sees them.
   const sidePorts = (job.presetForNotes as Preset).ports;
   if (sidePorts.length > 0) job.provisional.extra.sidecar_ports = sidePorts;
+  if (Object.keys(job.sidePorts).length > 0) job.provisional.extra.side_ports = job.sidePorts;
   if (job.monitoringPorts.length > 0) {
     job.provisional.extra.monitoring_ports = [...job.monitoringPorts];
   }
@@ -847,6 +852,8 @@ export async function buildRecord(job: KubeCreate): Promise<void> {
   const pre = job.presetForNotes as Preset;
   Object.assign(job.meta.extra, pre.extra);
   if (pre.ports.length > 0) job.meta.extra.sidecar_ports = pre.ports;
+  // Only what moved, in BOTH records: a re-up reads it back to render the same labels.
+  if (Object.keys(job.sidePorts).length > 0) job.meta.extra.side_ports = job.sidePorts;
   if (job.monitoringPorts.length > 0) {
     job.meta.extra.monitoring_ports = [...job.monitoringPorts];
   }
@@ -1027,7 +1034,7 @@ export async function createKubernetes(
     // Before the cluster is probed or anything is written.
     refuseEnforcedBefore880(requestedPreset(job), (job.resolved as Resolved).rcVersion);
     refuseVoiceBefore800(requestedPreset(job), (job.resolved as Resolved).rcVersion);
-    await claimSidecarPorts(job);
+    await certifyTheDirectory(job);
     await planClusterStep(job);
     await planTls(job);
     await planKubeTls(job);

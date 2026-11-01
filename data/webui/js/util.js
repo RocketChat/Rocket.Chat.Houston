@@ -183,6 +183,9 @@ const WIDE_BINDS = ["0.0.0.0", "::", "*"];
 
 // ---- repro list (master) ----------------------------------------------------
 let ALL_REPROS = [];
+// The Grafana origins this page's frame-src was built from: the monitored workspaces of its
+// first list read. A job naming one of these needs no reload.
+let GRAFANAS_AT_LOAD = null;
 let SELECTED = null;
 // What the stage is showing: "home" when nothing is picked, "workspace" for
 // the selected one, "activity" for the box-wide log. The rail selection and
@@ -277,7 +280,7 @@ function displayRepro(r) {
 }
 const offlineControls = new WeakMap();
 const MUTATING_CONTROLS = "#btn-new, #btn-prune, #actpane button, .d-actions button:not(.panetoggle), "
-  + "#create-submit, #create-stop, #job-stop, #seed-submit, #seed-clear, #upgrade-go, #rollback-go, #owner-go, #restore-go, #restore-into, "
+  + "#create-submit, #create-stop, #job-stop, #seed-submit, #seed-clear, #upgrade-go, #rollback-go, #owner-go, #restore-go, "
   + "#import-apply, #perf-submit, #cap-submit, #call-send, #passwd-go, #session-all, "
   + "#people-add-btn, #people-body button, #people-body select, #cluster-delete-go";
 function paintAvailability() {
@@ -391,6 +394,9 @@ function restartsClimbing(workspace, service, count) {
 // what their action changed.
 let reproRead = null;
 let reproNext = null;
+function originOf(url) {
+  try { return new URL(url).origin; } catch (_) { return ""; }
+}
 function loadRepros() {
   if (!reproRead) {
     reproRead = readRepros().finally(() => { reproRead = null; });
@@ -406,6 +412,9 @@ async function readRepros() {
     ]);
     const was = selectedSeen();
     ALL_REPROS = repros;
+    if (GRAFANAS_AT_LOAD === null) {
+      GRAFANAS_AT_LOAD = new Set(repros.filter((r) => r.grafana_url).map((r) => originOf(r.grafana_url)));
+    }
     LAST_REPROS_AT = Date.now();
     const recovering = !SERVER_ONLINE;
     setServerOnline(true);
@@ -551,6 +560,8 @@ Object.defineProperties(ctx, {
   "LOOPBACK_TITLE": { enumerable: true, get: () => LOOPBACK_TITLE },
   "WIDE_BINDS": { enumerable: true, get: () => WIDE_BINDS },
   "ALL_REPROS": { enumerable: true, get: () => ALL_REPROS, set: value => { ALL_REPROS = value; } },
+  "GRAFANAS_AT_LOAD": { enumerable: true, get: () => GRAFANAS_AT_LOAD },
+  "originOf": { enumerable: true, get: () => originOf },
   "SELECTED": { enumerable: true, get: () => SELECTED, set: value => { SELECTED = value; } },
   "VIEW": { enumerable: true, get: () => VIEW, set: value => { VIEW = value; } },
   "setView": { enumerable: true, get: () => setView },

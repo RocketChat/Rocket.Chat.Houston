@@ -30,6 +30,24 @@ function caught(work: () => Promise<unknown>): Promise<{ kind: string; message: 
   );
 }
 
+/**
+ * `lifecycle/ports.claimSidePorts` on a machine where every preferred side and monitoring port
+ * is free: the preset as built, nothing moved, monitoring on its preferred pair.
+ */
+async function preferredSidePorts(
+  _name: string,
+  pre: unknown,
+  _rebuild: unknown,
+  options: { monitoring?: readonly string[] } = {},
+) {
+  return {
+    pre,
+    side: {},
+    monitoring: (options.monitoring ?? []).map((slot) => (slot === 'prometheus' ? 9090 : 5050)),
+    moved: [],
+  };
+}
+
 describe('the preconditions that refuse', () => {
   it('says what a runtime cannot honour, and what reaching off-box means', () => {
     // What earlier releases answered, recorded.
@@ -267,8 +285,7 @@ describe('the Compose create path', () => {
     jest.doMock('../../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/ports'),
       pickHostPort: async () => 3000,
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
     }));
     jest.doMock('../../../src/core/lifecycle/tlsplan', () => ({
       ...jest.requireActual('../../../src/core/lifecycle/tlsplan'),

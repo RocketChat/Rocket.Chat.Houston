@@ -230,6 +230,20 @@ describe('resolveAxes', () => {
     ).toThrow(/expects a whole number/u);
   });
 
+  it('lets a typed --replicas win over the count a record carries back as a param', () => {
+    // `up --force --replicas 4` on a 3-instance workspace rebuilt it with 3: the recorded
+    // `instances` param came back and beat the flag (review 2026-10-31).
+    const axes = resolveAxes({
+      deployment: 'multi-instance',
+      replicas: 4,
+      params: { instances: 3 },
+    });
+    expect([axes.replicas, axes.params.instances]).toEqual([4, 4]);
+    expect(resolveAxes({ deployment: 'multi-instance', params: { instances: 3 } }).params).toEqual({
+      instances: 3,
+    });
+  });
+
   it('agrees with earlier releases on every axis of a representative matrix', () => {
     const cases = [
       {},

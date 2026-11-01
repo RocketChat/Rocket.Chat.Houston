@@ -71,6 +71,24 @@ beforeEach(() => {
   fs.rmSync(journalDir(), { recursive: true, force: true });
 });
 
+/**
+ * `lifecycle/ports.claimSidePorts` on a machine where every preferred side and monitoring port
+ * is free: the preset as built, nothing moved, monitoring on its preferred pair.
+ */
+async function preferredSidePorts(
+  _name: string,
+  pre: unknown,
+  _rebuild: unknown,
+  options: { monitoring?: readonly string[] } = {},
+) {
+  return {
+    pre,
+    side: {},
+    monitoring: (options.monitoring ?? []).map((slot) => (slot === 'prometheus' ? 9090 : 5050)),
+    moved: [],
+  };
+}
+
 describe('the note on disk', () => {
   it('is one JSON file per open side effect, named by its id', () => {
     // A DIRECTORY rather than a single log: entries are created and cleared concurrently
@@ -667,8 +685,7 @@ describe('the note a create writes before it starts', () => {
     jest.doMock('../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../src/core/lifecycle/ports'),
       pickHostPort: async () => 3001,
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
     }));
     jest.doMock('../../src/core/lifecycle/tlsplan', () => ({
       ...jest.requireActual('../../src/core/lifecycle/tlsplan'),
@@ -801,8 +818,7 @@ describe('the note of a create the axes rename', () => {
     jest.doMock('../../src/core/lifecycle/ports', () => ({
       ...jest.requireActual('../../src/core/lifecycle/ports'),
       pickHostPort: async () => 3001,
-      checkSidecarPorts: async () => undefined,
-      checkMonitorPorts: async () => undefined,
+      claimSidePorts: preferredSidePorts,
     }));
     jest.doMock('../../src/core/lifecycle/tlsplan', () => ({
       ...jest.requireActual('../../src/core/lifecycle/tlsplan'),

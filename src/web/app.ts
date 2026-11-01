@@ -58,10 +58,15 @@ export function requireSafeServePosture(posture: ServePosture): void {
 }
 
 export function contentSecurityPolicy(grafanaOrigins: readonly string[] = []): string {
+  // The preferred Grafana first, then each monitored workspace's own, once each: a second
+  // monitored workspace's Grafana is on another port, and a frame on it is refused otherwise.
+  const frames = [
+    ...new Set([`http://localhost:${String(MONITOR_PORTS[1])}`, ...grafanaOrigins]),
+  ].join(' ');
   return (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
     "img-src 'self' data:; connect-src 'self' ws: wss:; " +
-    `frame-src 'self' http://localhost:${String(MONITOR_PORTS[1])}${grafanaOrigins.length > 0 ? ` ${grafanaOrigins.join(' ')}` : ''}; ` +
+    `frame-src 'self' ${frames}; ` +
     "base-uri 'none'; form-action 'self'; object-src 'none'"
   );
 }

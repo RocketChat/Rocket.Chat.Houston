@@ -93,7 +93,6 @@ ctx.$("#owner-cancel").addEventListener("click", () => ctx.$("#owner-dialog").cl
 ctx.$("#owner-form").addEventListener("submit", (e) => { e.preventDefault(); ctx.submitHandOver(); });
 ctx.$("#restore-cancel").addEventListener("click", () => ctx.$("#restore-dialog").close());
 ctx.$("#restore-go").addEventListener("click", ctx.submitRestoreNew);
-ctx.$("#restore-into").addEventListener("click", ctx.restoreIntoInstead);
 ctx.$("#import-cancel").addEventListener("click", () => ctx.$("#import-dialog").close());
 ctx.$("#import-preview").addEventListener("click", (e) => { e.preventDefault(); ctx.previewImport(); });
 ctx.$("#import-apply").addEventListener("click", ctx.applyImport);
