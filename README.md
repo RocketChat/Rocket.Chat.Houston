@@ -24,7 +24,7 @@ Kubernetes is optional. The [Kubernetes guide](data/docs/kubernetes.md) covers i
 ## Install
 
 ```bash
-npm install -g @klovekesh37/houston
+npm install -g @rocket.chat/houston
 houston doctor
 ```
 
@@ -111,7 +111,7 @@ The guides ship with the package, so they are on every machine houston is instal
 
 houston is maintained by the Rocket.Chat support team and is released under the
 [MIT licence](LICENSE). Report problems at
-[github.com/klovekesh37/houston/issues](https://github.com/klovekesh37/houston/issues).
+[github.com/RocketChat/Rocket.Chat.Houston/issues](https://github.com/RocketChat/Rocket.Chat.Houston/issues).
 
 The 1.x source is in the repository's history, in `legacy/` at the
-[v2.1.1 tag](https://github.com/klovekesh37/houston/tree/v2.1.1/legacy).
+[v2.1.1 tag](https://github.com/RocketChat/Rocket.Chat.Houston/tree/v2.1.1/legacy).

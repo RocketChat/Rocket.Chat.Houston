@@ -19,10 +19,10 @@ integration, checking a pull request's build, or a demo or training workspace.
 workspace, so answer it without booting one. houston only manages the workspaces it
 creates; it cannot reach a Rocket.Chat deployment somebody else runs.
 
-If `houston` is not found, it is not installed: `npm install -g @klovekesh37/houston` installs it
+If `houston` is not found, it is not installed: `npm install -g @rocket.chat/houston` installs it
 (Node 24.10.0 or later), and Docker with `docker compose` v2 must be running. Then
 `houston doctor` names anything else a boot would trip on. Its guides ship in the
-package's `data/docs/` (`$(npm root -g)/@klovekesh37/houston/data/docs/`).
+package's `data/docs/` (`$(npm root -g)/@rocket.chat/houston/data/docs/`).
 
 ## Requests and the commands they mean
 

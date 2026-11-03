@@ -1,15 +1,15 @@
 {
-  "name": "@klovekesh37/houston",
+  "name": "@rocket.chat/houston",
   "version": "2.1.7",
   "description": "Reproduce a customer's Rocket.Chat issue on their exact version, in minutes.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/klovekesh37/houston.git"
+    "url": "git+https://github.com/RocketChat/Rocket.Chat.Houston.git"
   },
-  "homepage": "https://github.com/klovekesh37/houston#readme",
+  "homepage": "https://github.com/RocketChat/Rocket.Chat.Houston#readme",
   "bugs": {
-    "url": "https://github.com/klovekesh37/houston/issues"
+    "url": "https://github.com/RocketChat/Rocket.Chat.Houston/issues"
   },
   "keywords": [
     "rocket.chat",

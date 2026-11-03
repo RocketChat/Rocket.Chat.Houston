@@ -39,7 +39,7 @@ describe('the voice preset', () => {
     // The CLI prints the line; the GUI's card reads "Name: url" as a link row.
     for (const params of [{}, { sip_integration: 'on', pbx: 'on' }]) {
       expect(load('voice', params).notes).toContain(
-        'Voice guide (the test calls, the PBX, the call flow): https://github.com/klovekesh37/houston/blob/main/data/docs/voice.md',
+        'Voice guide (the test calls, the PBX, the call flow): https://github.com/RocketChat/Rocket.Chat.Houston/blob/main/data/docs/voice.md',
       );
     }
   });

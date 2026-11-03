@@ -68,7 +68,7 @@ const DRACHTIO_IMAGE = 'docker.io/drachtio/drachtio-server:latest';
 const FREESWITCH_IMAGE = 'docker.io/rocketchat/freeswitch:latest';
 /** The shipped guide, where it is read online: the eight test calls, the PBX, the call flow. */
 export const VOICE_GUIDE_URL =
-  'https://github.com/klovekesh37/houston/blob/main/data/docs/voice.md';
+  'https://github.com/RocketChat/Rocket.Chat.Houston/blob/main/data/docs/voice.md';
 const DRACHTIO_PORT = 9022;
 const DRACHTIO_SECRET = 'houston';
 const SIP_PORT = 5060;

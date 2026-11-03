@@ -9,7 +9,7 @@
 ## Updating houston
 
 ```bash
-npm update -g @klovekesh37/houston
+npm update -g @rocket.chat/houston
 houston --version
 houston skill install     # refresh the agent skill copies; an update does not touch them
 houston doctor
@@ -17,6 +17,16 @@ houston doctor
 
 From a clone: `git pull`, then `corepack enable && yarn install --immutable`. There is
 nothing to build.
+
+Installed as `@klovekesh37/houston`, its earlier name? `npm update` stays on that
+name. Replace it once; both names install the same `houston` command, so the old one has to
+go first:
+
+```bash
+npm uninstall -g @klovekesh37/houston
+npm install -g @rocket.chat/houston
+houston skill install
+```
 
 Run `houston skill install` as the user who runs `houston serve`. Until it runs, `houston
 doctor`, in the GUI too, warns that the installed agent skill is out of date. If houston runs
@@ -30,7 +40,7 @@ the old command, install 2.x, and stop every running `houston serve` (1.x includ
 ```bash
 pipx uninstall rc-repro     # if you had rc-repro
 pipx uninstall houston      # if you had houston 1.x
-npm install -g @klovekesh37/houston
+npm install -g @rocket.chat/houston
 houston doctor              # the first command takes over your existing state
 ```
 

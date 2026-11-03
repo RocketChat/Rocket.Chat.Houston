@@ -25,7 +25,7 @@ export HOUSTON_HOME=$(mktemp -d) HOUSTON_SKILL_HOME=$(mktemp -d)
 Then:
 
 ```bash
-git clone https://github.com/klovekesh37/houston.git && cd houston
+git clone https://github.com/RocketChat/Rocket.Chat.Houston.git && cd Rocket.Chat.Houston
 npm install -g corepack         # Node 26 no longer ships it; on Node 24 this is harmless
 corepack enable                 # yarn 4, at the exact version package.json pins
 yarn install --immutable        # fails rather than resolving versions the lockfile does not name
@@ -259,4 +259,4 @@ A version can be published only once. A fix after that ships as the next patch v
 ---
 
 Maintained by the Rocket.Chat support team. Issues and requests:
-<https://github.com/klovekesh37/houston/issues>
+<https://github.com/RocketChat/Rocket.Chat.Houston/issues>

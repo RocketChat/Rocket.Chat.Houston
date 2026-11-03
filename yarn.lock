@@ -1056,35 +1056,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@klovekesh37/houston@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "@klovekesh37/houston@workspace:."
-  dependencies:
-    "@eslint/js": "npm:^10.0.1"
-    "@fastify/formbody": "npm:^9.0.0"
-    "@fastify/multipart": "npm:^10.1.1"
-    "@fastify/sse": "npm:^0.6.0"
-    "@fastify/websocket": "npm:^11.3.0"
-    "@swc/core": "npm:^1.15.10"
-    "@swc/jest": "npm:^0.2.39"
-    "@types/jest": "npm:^30.0.0"
-    "@types/node": "npm:~24.13.4"
-    commander: "npm:~14.0.2"
-    dependency-cruiser: "npm:~18.2.0"
-    eslint: "npm:^10.10.0"
-    fastify: "npm:5.12.5"
-    jest: "npm:^30.5.1"
-    playwright: "npm:^1.63.0"
-    prettier: "npm:^3.9.6"
-    ts-morph: "npm:~27.0.2"
-    typescript: "npm:~5.9.3"
-    typescript-eslint: "npm:^8.70.0"
-    yaml: "npm:^2.9.1"
-  bin:
-    houston: bin/houston
-  languageName: unknown
-  linkType: soft
-
 "@napi-rs/wasm-runtime@npm:^1.1.4":
   version: 1.2.4
   resolution: "@napi-rs/wasm-runtime@npm:1.2.4"
@@ -1251,6 +1222,35 @@ __metadata:
   checksum: 10c0/153f0f4563f505faeba13c733efa0e05e467ce1c6b941055a5fd3b4560da60fbf1dff4b11da0075f034ddda11f2842b90395f60895dde5825875b616edccc11c
   languageName: node
   linkType: hard
+
+"@rocket.chat/houston@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "@rocket.chat/houston@workspace:."
+  dependencies:
+    "@eslint/js": "npm:^10.0.1"
+    "@fastify/formbody": "npm:^9.0.0"
+    "@fastify/multipart": "npm:^10.1.1"
+    "@fastify/sse": "npm:^0.6.0"
+    "@fastify/websocket": "npm:^11.3.0"
+    "@swc/core": "npm:^1.15.10"
+    "@swc/jest": "npm:^0.2.39"
+    "@types/jest": "npm:^30.0.0"
+    "@types/node": "npm:~24.13.4"
+    commander: "npm:~14.0.2"
+    dependency-cruiser: "npm:~18.2.0"
+    eslint: "npm:^10.10.0"
+    fastify: "npm:5.12.5"
+    jest: "npm:^30.5.1"
+    playwright: "npm:^1.63.0"
+    prettier: "npm:^3.9.6"
+    ts-morph: "npm:~27.0.2"
+    typescript: "npm:~5.9.3"
+    typescript-eslint: "npm:^8.70.0"
+    yaml: "npm:^2.9.1"
+  bin:
+    houston: bin/houston
+  languageName: unknown
+  linkType: soft
 
 "@sinclair/typebox@npm:^0.34.0":
   version: 0.34.52
