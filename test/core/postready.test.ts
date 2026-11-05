@@ -37,13 +37,14 @@ function recorder() {
 const noSleep = () => Promise.resolve();
 
 /** Load the module with `./rcapi` fully stubbed to one answer. */
-function withRcapi(answers: Record<string, unknown>) {
+function withRcapi(answers: Record<string, unknown>, mocks: Record<string, () => unknown> = {}) {
   jest.resetModules();
   jest.doMock('../../src/core/rcapi', () => ({
     getSetting: async () => 'keycloak',
     samlProviderState: async () => 'unloaded',
     ...answers,
   }));
+  for (const [modulePath, factory] of Object.entries(mocks)) jest.doMock(modulePath, factory);
   return require('../../src/core/postready') as typeof ModNS;
 }
 
@@ -1328,5 +1329,510 @@ describe('Keycloak under a path', () => {
       noSleep,
     );
     expect(seen[0]?.[2]).toContain('--server http://localhost:8080/keycloak ');
+  });
+});
+
+describe('the webhooks preset wires the inbox, and says what it captured', () => {
+  afterEach(() => {
+    jest.resetModules();
+  });
+
+  /** The session the receiver's API hands out here, and the JSON it is made to answer. */
+  const SESSION = 'ses-1';
+  const ANSWER = Buffer.from('{"captured":true}').toString('base64');
+  const RECEIVER = `http://webhooks:8080/${SESSION}`;
+  const INBOX = `http://127.0.0.1:8086/s/${SESSION}`;
+  const ON = ['Livechat_webhook_on_start', 'Livechat_webhook_on_close'];
+  const EVENTS = [
+    'start',
+    'close',
+    'chat_taken',
+    'chat_queued',
+    'forward',
+    'offline_msg',
+    'visitor_message',
+    'agent_message',
+  ].map((event) => `Livechat_webhook_on_${event}`);
+
+  function whMeta(capture = 'off', hooks?: Record<string, unknown>): Metadata {
+    const m = meta({ preset: 'webhooks', rootUrl: 'http://127.0.0.1:3000' });
+    // The two origins: the session is made in the action, and the record carries its id.
+    m.extra.post_ready = [
+      {
+        action: 'webhooks_setup',
+        receiver: 'http://webhooks:8080',
+        ui_url: 'http://localhost:8086',
+        capture,
+      },
+    ];
+    if (hooks !== undefined) m.extra.webhooks = hooks;
+    return m;
+  }
+
+  /** The receiver's own API as the inbox answers it: sessions by uuid, one made on POST. */
+  function inboxApi(
+    sessions: Record<string, string | readonly [number, string]> = { '*': ANSWER },
+    made = SESSION,
+  ) {
+    const posted: unknown[] = [];
+    const call = (_root: string, method: string, p: string, opts?: { data?: unknown }) => {
+      if (method === 'POST' && p === '/api/session') {
+        posted.push(opts?.data);
+        return Promise.resolve([200, JSON.stringify({ uuid: made })]);
+      }
+      const got = /^\/api\/session\/([^/]+)$/u.exec(p);
+      if (got === null) return Promise.resolve([200, '']);
+      const found = sessions[got[1] as string] ?? sessions['*'];
+      if (found === undefined) return Promise.resolve([404, '{}']);
+      const [status_code, body] = typeof found === 'string' ? [200, found] : found;
+      return Promise.resolve([
+        200,
+        JSON.stringify({ uuid: got[1], response: { status_code, response_body_base64: body } }),
+      ]);
+    };
+    return { posted, call };
+  }
+
+  /** rcapi as a fresh workspace answers it; `settings` overrides what getSetting says per id. */
+  function stub(
+    settings: Record<string, unknown> = {},
+    over: Record<string, unknown> = {},
+    inbox = inboxApi(),
+  ) {
+    const set: [string, unknown][] = [];
+    const repointed: [unknown, unknown][] = [];
+    const warmed: string[] = [];
+    const answers: Record<string, unknown> = {
+      createOutgoingWebhook: () => Promise.resolve('o1'),
+      createIncomingWebhook: () => Promise.resolve('/hooks/i1/t1'),
+      getSetting: (_u: string, _a: unknown, _p: string, id: string) =>
+        Promise.resolve(
+          id in settings ? settings[id] : id.startsWith('Livechat_webhook_on_') ? false : '',
+        ),
+      setSetting: (_u: string, _a: unknown, _p: string, id: string, value: unknown) => {
+        set.push([id, value]);
+        return Promise.resolve(true);
+      },
+      settingIds: () => Promise.resolve(new Set([...ON, 'Livechat_webhook_on_capture', 'Other'])),
+      listIntegrations: () => Promise.resolve([]),
+      updateOutgoingUrls: (
+        _u: string,
+        _a: unknown,
+        _p: string,
+        doc: Record<string, unknown>,
+        urls: string[],
+      ) => {
+        repointed.push([doc.name, urls]);
+        return Promise.resolve(true);
+      },
+      call: (root: string, method: string, p: string, opts?: { data?: unknown }) => {
+        if (p.startsWith('/api/session')) return inbox.call(root, method, p, opts);
+        warmed.push(`${root}${p}`);
+        return Promise.resolve([200, '']);
+      },
+      ...over,
+    };
+    return { answers, set, repointed, warmed, posted: inbox.posted };
+  }
+
+  /** The module with rcapi stubbed and `updateMeta` writing into `m` itself. */
+  function load(m: Metadata, answers: Record<string, unknown>) {
+    return withRcapi(answers, {
+      '../../src/core/runner/record': () => ({
+        ...(jest.requireActual('../../src/core/runner/record') as object),
+        updateMeta: (_name: string, mutate: (meta: Metadata) => void) => {
+          mutate(m);
+          return Promise.resolve(m);
+        },
+      }),
+    });
+  }
+
+  it('makes both sample integrations, wires the Omnichannel webhook and records the hook', async () => {
+    const m = whMeta();
+    const { answers, set, warmed } = stub();
+    const postready = load(m, answers);
+    const { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(m.extra.webhooks).toEqual({
+      session: SESSION,
+      incoming: '/hooks/i1/t1',
+      outgoing_name: 'houston-outgoing',
+      omnichannel: `${RECEIVER}/omnichannel`,
+      captured: [],
+    });
+    expect(set).toEqual([
+      ['Livechat_webhookUrl', `${RECEIVER}/omnichannel`],
+      ['Livechat_secret_token', 'houston'],
+      // Every switch the known list names, whatever the (possibly short) settings list says.
+      ...EVENTS.map((id) => [id, true]),
+      ['SSRF_Allowlist', 'webhooks'],
+    ]);
+    // Made through the API, the session needs no request to exist.
+    expect(warmed).toEqual([]);
+    const joined = said.join('\n');
+    expect(joined).toContain(INBOX);
+    expect(joined).toContain('houston info --name w');
+    // The hook token is for `info`, not for every log line.
+    expect(joined).not.toContain('t1');
+  });
+
+  /** `createOutgoingWebhook` as a spy: what post-ready asked it to make. */
+  function creating(created: unknown[]) {
+    return {
+      createOutgoingWebhook: (_u: string, _a: unknown, _p: string, options: unknown) => {
+        created.push(options);
+        return Promise.resolve('o1');
+      },
+    };
+  }
+
+  it('makes the inbox session itself, with a JSON answer Rocket.Chat reads as success', async () => {
+    // The receiver's auto-created session answers 200 with an EMPTY body, and Rocket.Chat
+    // treats an empty body as a failed call: four retries per message, and the History tab
+    // reading too-many-retries. A session made through the API carries a body.
+    const m = whMeta();
+    const created: unknown[] = [];
+    const { answers, set, posted } = stub({}, creating(created));
+    const postready = load(m, answers);
+    const { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(posted).toEqual([
+      {
+        status_code: 200,
+        headers: [{ name: 'Content-Type', value: 'application/json' }],
+        delay: 0,
+        response_body_base64: ANSWER,
+      },
+    ]);
+    expect(created).toEqual([{ name: 'houston-outgoing', urls: [`${RECEIVER}/outgoing`] }]);
+    expect(set).toContainEqual(['Livechat_webhookUrl', `${RECEIVER}/omnichannel`]);
+    expect(m.extra.webhooks).toMatchObject({ session: SESSION });
+    // On the port the preset published, at the address houston reaches the workspace by.
+    expect(said.join('\n')).toContain(INBOX);
+  });
+
+  it('keeps the recorded session while it still answers as the inbox', async () => {
+    const m = whMeta('off', { session: 'ses-0' });
+    const created: unknown[] = [];
+    const { answers, set, posted } = stub({}, creating(created), inboxApi({ 'ses-0': ANSWER }));
+    const postready = load(m, answers);
+    const { emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(posted).toEqual([]);
+    expect(created).toEqual([
+      { name: 'houston-outgoing', urls: ['http://webhooks:8080/ses-0/outgoing'] },
+    ]);
+    expect(set).toContainEqual(['Livechat_webhookUrl', 'http://webhooks:8080/ses-0/omnichannel']);
+    expect(m.extra.webhooks).toMatchObject({ session: 'ses-0' });
+  });
+
+  it('adopts the session the sample integration still posts to when the record forgot it', async () => {
+    // `up --force` rebuilds `extra`, and the volume keeps the session: a second one would
+    // split the inbox in two, the link on one and the integrations on the other.
+    const m = whMeta();
+    const listed = [
+      {
+        name: 'houston-outgoing',
+        type: 'webhook-outgoing',
+        urls: ['http://webhooks:8080/ses-0/outgoing'],
+      },
+    ];
+    const { answers, set, posted, repointed } = stub(
+      {},
+      { listIntegrations: () => Promise.resolve(listed) },
+      inboxApi({ 'ses-0': ANSWER }),
+    );
+    const postready = load(m, answers);
+    const { emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(posted).toEqual([]);
+    expect(repointed).toEqual([]);
+    expect(set).toContainEqual(['Livechat_webhookUrl', 'http://webhooks:8080/ses-0/omnichannel']);
+    expect(m.extra.webhooks).toMatchObject({ session: 'ses-0' });
+  });
+
+  it("replaces a session the receiver lost or made by itself, and repoints what used it; an engineer's own stays", async () => {
+    const lost = {
+      name: 'houston-outgoing',
+      type: 'webhook-outgoing',
+      urls: ['http://webhooks:8080/ses-0/outgoing'],
+    };
+    const done = {
+      name: 'Done',
+      type: 'webhook-outgoing',
+      urls: ['http://webhooks:8080/ses-0/captured/Done?from=https%3A%2F%2Fold.example.com%2Fx'],
+    };
+    // Made in the inbox UI with a 500: it answers, as it was told to, and is nobody's to move.
+    const mine = { name: 'Mine', type: 'webhook-outgoing', urls: ['http://webhooks:8080/other/x'] };
+    for (const inbox of [
+      inboxApi({ other: [500, ''] }), // ses-0 gone
+      inboxApi({ 'ses-0': '', other: [500, ''] }), // ses-0 auto-created: 200 and nothing else
+    ]) {
+      const m = whMeta('off', { session: 'ses-0' });
+      const { answers, set, posted, repointed } = stub(
+        { Livechat_webhookUrl: 'http://webhooks:8080/ses-0/omnichannel' },
+        { listIntegrations: () => Promise.resolve([lost, done, mine]) },
+        inbox,
+      );
+      const postready = load(m, answers);
+      const { emit } = recorder();
+      expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+      expect(posted).toHaveLength(1);
+      expect(repointed).toEqual([
+        ['houston-outgoing', [`${RECEIVER}/outgoing`]],
+        ['Done', [`${RECEIVER}/captured/Done?from=https%3A%2F%2Fold.example.com%2Fx`]],
+      ]);
+      expect(set).toContainEqual(['Livechat_webhookUrl', `${RECEIVER}/omnichannel`]);
+      expect(m.extra.webhooks).toMatchObject({
+        session: SESSION,
+        omnichannel: `${RECEIVER}/omnichannel`,
+        captured: [
+          { name: 'Done', from: ['https://old.example.com/x'] },
+          { name: 'Mine', from: [] },
+        ],
+      });
+    }
+  });
+
+  it("wires nothing while the inbox's API cannot be reached, and says what to run", async () => {
+    // The auto-created session would bring the retries back: better nothing than that.
+    const m = whMeta();
+    const created: unknown[] = [];
+    const { answers, set } = stub(
+      {},
+      {
+        ...creating(created),
+        call: () => Promise.reject(new Error('ECONNREFUSED')),
+      },
+    );
+    const postready = load(m, answers);
+    const { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([
+      'webhooks_setup',
+    ]);
+    expect(created).toEqual([]);
+    expect(set).toEqual([]);
+    expect(m.extra.webhooks).toBeUndefined();
+    const joined = said.join('\n');
+    expect(joined).toContain('http://127.0.0.1:8086');
+    expect(joined).toContain('houston ready --name w');
+  });
+
+  it('accepts the action the first build recorded, a fixed session in both addresses', async () => {
+    const m = whMeta();
+    const fixed = '11111111-1111-4111-8111-111111111111';
+    m.extra.post_ready = [
+      {
+        action: 'webhooks_setup',
+        receiver: `http://webhooks:8080/${fixed}`,
+        ui_url: `http://localhost:8086/s/${fixed}`,
+        capture: 'off',
+      },
+    ];
+    const created: unknown[] = [];
+    const { answers, posted } = stub({}, creating(created));
+    const postready = load(m, answers);
+    const { emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(posted).toHaveLength(1);
+    expect(created).toEqual([{ name: 'houston-outgoing', urls: [`${RECEIVER}/outgoing`] }]);
+  });
+
+  it("leaves an engineer's repoint to another inbox session alone", async () => {
+    const m = whMeta();
+    const { answers, set } = stub({ Livechat_webhookUrl: 'http://webhooks:8080/other-uuid/x' });
+    const postready = load(m, answers);
+    const { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(set.map(([id]) => id)).not.toContain('Livechat_webhookUrl');
+    expect(set.map(([id]) => id)).toContain('Livechat_secret_token');
+    expect(said.join('\n')).not.toContain('replaced');
+    expect((m.extra.webhooks as { omnichannel: string }).omnichannel).toBe(
+      'http://webhooks:8080/other-uuid/x',
+    );
+  });
+
+  it("leaves a customer's Omnichannel webhook where it is by default, and says how to capture it", async () => {
+    const m = whMeta();
+    const { answers, set } = stub({ Livechat_webhookUrl: 'https://crm.example.com/hook' });
+    const postready = load(m, answers);
+    const { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    // Nothing of the customer's webhook is widened: no new events to their CRM.
+    expect(set.map(([id]) => id).filter((id) => id.startsWith('Livechat_'))).toEqual([]);
+    expect(set.map(([id]) => id)).toContain('SSRF_Allowlist');
+    const joined = said.join('\n');
+    expect(joined).toContain('crm.example.com');
+    expect(joined).toContain('capture=all');
+    expect((m.extra.webhooks as { omnichannel: string }).omnichannel).toBe(
+      'https://crm.example.com/hook',
+    );
+  });
+
+  it('replaces it with capture=all, naming what it was', async () => {
+    const m = whMeta('all');
+    const { answers, set } = stub({ Livechat_webhookUrl: 'https://crm.example.com/hook' });
+    const postready = load(m, answers);
+    const { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(set).toEqual(
+      expect.arrayContaining([
+        // The customer's URL rides along in ?from=, as a captured integration's does.
+        [
+          'Livechat_webhookUrl',
+          `${RECEIVER}/omnichannel?from=https%3A%2F%2Fcrm.example.com%2Fhook`,
+        ],
+        ['Livechat_secret_token', 'houston'],
+      ]),
+    );
+    expect(said.join('\n')).toContain('https://crm.example.com/hook');
+    expect((m.extra.webhooks as { omnichannel: string }).omnichannel).toBe(
+      `${RECEIVER}/omnichannel?from=https%3A%2F%2Fcrm.example.com%2Fhook`,
+    );
+  });
+
+  it('leaves the Omnichannel webhook alone when its URL could not be read', async () => {
+    // null is "could not read", not "empty": writing over a URL nobody saw could replace
+    // a customer's without a word.
+    const m = whMeta();
+    const { answers, set } = stub({ Livechat_webhookUrl: null });
+    const postready = load(m, answers);
+    const { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([
+      'webhooks_setup',
+    ]);
+    expect(set.map(([id]) => id).filter((id) => id.startsWith('Livechat_'))).toEqual([]);
+    expect(said.join('\n')).toContain('could not read');
+  });
+
+  it('switches the events on from its own list when the settings list is short or absent', async () => {
+    // settings?count=0 is capped on a workspace without API_Allow_Infinite_Count: a list
+    // that lacks the switches must not mean "this version has none".
+    for (const settingIds of [
+      () => Promise.resolve(null),
+      () => Promise.resolve(new Set(['Other'])),
+    ]) {
+      const m = whMeta();
+      const { answers, set } = stub({}, { settingIds });
+      const postready = load(m, answers);
+      const { emit } = recorder();
+      expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+      expect(set.map(([id]) => id)).toEqual(expect.arrayContaining(EVENTS));
+    }
+  });
+
+  it('sets the token where a version stores false for an empty one', async () => {
+    const m = whMeta();
+    const { answers, set } = stub({ Livechat_secret_token: false });
+    const postready = load(m, answers);
+    const { emit } = recorder();
+    await postready.runPostReady(m, AUTH, emit, { sleep: noSleep });
+    expect(set).toContainEqual(['Livechat_secret_token', 'houston']);
+  });
+
+  it('sets only what is off or empty, and skips a setting this version lacks', async () => {
+    const m = whMeta();
+    const { answers, set } = stub({
+      Livechat_secret_token: 'abc',
+      ...Object.fromEntries(EVENTS.map((id) => [id, true])),
+      Livechat_webhook_on_close: null,
+      SSRF_Allowlist: 'webhooks\nfoo.internal',
+    });
+    const postready = load(m, answers);
+    const { emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(set).toEqual([['Livechat_webhookUrl', `${RECEIVER}/omnichannel`]]);
+  });
+
+  it('appends the inbox to an allowlist that names other hosts', async () => {
+    const m = whMeta();
+    const { answers, set } = stub({ SSRF_Allowlist: 'foo.internal' });
+    const postready = load(m, answers);
+    const { emit } = recorder();
+    await postready.runPostReady(m, AUTH, emit, { sleep: noSleep });
+    expect(set).toContainEqual(['SSRF_Allowlist', 'foo.internal\nwebhooks']);
+  });
+
+  const LISTED = [
+    { name: 'houston-outgoing', type: 'webhook-outgoing', urls: [`${RECEIVER}/outgoing`] },
+    {
+      name: 'Jira',
+      type: 'webhook-outgoing',
+      urls: ['https://jira.example.com/hook'],
+      scriptEnabled: true,
+      script: 'class Script {}',
+    },
+    {
+      name: 'Done',
+      type: 'webhook-outgoing',
+      urls: [`${RECEIVER}/captured/Done?from=https%3A%2F%2Fold.example.com%2Fx`],
+    },
+  ];
+
+  it('with capture=all repoints every outgoing integration that still posts elsewhere, keeping the original in the URL', async () => {
+    const m = whMeta('all');
+    const { answers, repointed } = stub({}, { listIntegrations: () => Promise.resolve(LISTED) });
+    const postready = load(m, answers);
+    const { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(repointed).toEqual([
+      ['Jira', [`${RECEIVER}/captured/Jira?from=https%3A%2F%2Fjira.example.com%2Fhook`]],
+    ]);
+    expect((m.extra.webhooks as { captured: unknown }).captured).toEqual([
+      { name: 'Jira', from: ['https://jira.example.com/hook'] },
+      { name: 'Done', from: ['https://old.example.com/x'] },
+    ]);
+    const joined = said.join('\n');
+    expect(joined).toContain("repointed 'Jira'");
+    // A re-saved script runs as written from 9.0.0: the one thing a repoint can change.
+    expect(joined).toContain('strict mode');
+  });
+
+  it('with capture off repoints nothing, and still lists what an earlier run captured', async () => {
+    const m = whMeta();
+    const { answers, repointed } = stub({}, { listIntegrations: () => Promise.resolve(LISTED) });
+    const postready = load(m, answers);
+    const { emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect(repointed).toEqual([]);
+    expect((m.extra.webhooks as { captured: unknown }).captured).toEqual([
+      { name: 'Done', from: ['https://old.example.com/x'] },
+    ]);
+  });
+
+  it('is only partly configured when a sample integration, a setting or a repoint is refused', async () => {
+    const refusedCreate = stub({}, { createOutgoingWebhook: () => Promise.resolve(null) });
+    let m = whMeta();
+    let postready = load(m, refusedCreate.answers);
+    let { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([
+      'webhooks_setup',
+    ]);
+    expect(said.join('\n')).toContain('houston-outgoing');
+
+    const refusedSetting = stub({}, { setSetting: () => Promise.resolve(false) });
+    m = whMeta();
+    postready = load(m, refusedSetting.answers);
+    ({ said, emit } = recorder());
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([
+      'webhooks_setup',
+    ]);
+    expect(said.join('\n')).toContain('Livechat_webhookUrl');
+
+    const refusedRepoint = stub(
+      {},
+      {
+        listIntegrations: () => Promise.resolve(LISTED),
+        updateOutgoingUrls: () => Promise.resolve(false),
+      },
+    );
+    m = whMeta('all');
+    postready = load(m, refusedRepoint.answers);
+    ({ said, emit } = recorder());
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([
+      'webhooks_setup',
+    ]);
+    expect(said.join('\n')).toContain('Jira');
   });
 });

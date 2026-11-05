@@ -457,6 +457,27 @@ describe('the create path end to end, stopped at the write seam', () => {
     expect(said.filter((line) => line.includes(softphones))).toHaveLength(1);
   });
 
+  it('warns that a wide bind publishes the webhook inbox UI', async () => {
+    // The inbox lets anyone who reaches it read and shape the requests Rocket.Chat sends;
+    // --bind exposes it, so the warning must name it even though its link is now dynamic.
+    const { createDocker } = capture();
+    const said: string[] = [];
+    await expect(
+      createDocker.createRepro(
+        createReq({
+          version: '8.8.1',
+          name: 'wide-wh',
+          preset: 'webhooks',
+          bind: '0.0.0.0',
+          wait: false,
+          offline: true,
+        }),
+        (event) => said.push(event.message),
+      ),
+    ).rejects.toThrow('stopped at the write seam');
+    expect(said.filter((line) => /the webhooks UI on webhooks:\d+/u.test(line))).toHaveLength(1);
+  });
+
   it('builds several presets as one workspace, recorded under the canonical name', async () => {
     const { seen, createDocker } = capture();
     await expect(

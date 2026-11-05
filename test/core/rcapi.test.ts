@@ -15,7 +15,11 @@ import {
   authHeaders,
   call,
   createIncomingWebhook,
+  createOutgoingWebhook,
   extractOtp,
+  findIntegration,
+  listIntegrations,
+  updateOutgoingUrls,
   fetchEmailOtp,
   fetchSamlIdpCert,
   generatePat,
@@ -750,8 +754,8 @@ describe('the rest of the surface', () => {
           status: 200,
           text: JSON.stringify({
             integrations: [
-              { name: 'other', _id: 'x', token: 'y' },
-              { name: 'houston-loadtest-hook', _id: 'i1', token: 't1' },
+              { name: 'other', type: 'webhook-incoming', _id: 'x', token: 'y' },
+              { name: 'houston-loadtest-hook', type: 'webhook-incoming', _id: 'i1', token: 't1' },
             ],
           }),
         },
@@ -765,6 +769,200 @@ describe('the rest of the surface', () => {
   it('answers null for a webhook it could neither create nor find', async () => {
     script([], new RequestFailed('refused', 'http://x'));
     expect(await createIncomingWebhook('http://x', { token: 't', userId: 'u' }, 'pw')).toBeNull();
+  });
+
+  it('looks before it creates: an existing hook is reused and no second one is made', async () => {
+    // Rocket.Chat accepts a duplicate integration name, so "create, then look on refusal"
+    // added a hook on every load test, ready and upgrade.
+    script([
+      [
+        at('integrations.list'),
+        {
+          status: 200,
+          text: JSON.stringify({
+            integrations: [
+              { name: 'houston-loadtest-hook', type: 'webhook-incoming', _id: 'i1', token: 't1' },
+            ],
+            total: 1,
+          }),
+        },
+      ],
+    ]);
+    expect(await createIncomingWebhook('http://x', { token: 't', userId: 'u' }, 'pw')).toBe(
+      '/hooks/i1/t1',
+    );
+    expect(seen.map((s) => s.url).some((u) => u.includes('integrations.create'))).toBe(false);
+  });
+});
+
+describe('integrations, listed and made', () => {
+  const AUTH = { token: 't', userId: 'u' };
+  const page = (offset: number, names: string[], total: number) =>
+    [
+      (url: string, options: Record<string, unknown>) =>
+        url.includes('integrations.list') &&
+        (options.params as Record<string, unknown> | undefined)?.offset === offset,
+      {
+        status: 200,
+        text: JSON.stringify({
+          integrations: names.map((name) => ({ name, type: 'webhook-outgoing', _id: name })),
+          total,
+        }),
+      },
+    ] as Rule;
+
+  it('reads every page of the list, and nothing when the list is refused', async () => {
+    const first = Array.from({ length: 100 }, (_, i) => `hook-${String(i)}`);
+    script([page(0, first, 103), page(100, ['a', 'b', 'c'], 103)]);
+    const all = await listIntegrations('http://x', AUTH, 'pw');
+    expect(all?.length).toBe(103);
+    expect(seen.map((s) => s.params?.offset)).toEqual([0, 100]);
+    script([], { status: 401, ok: false, text: '{"success":false}' });
+    expect(await listIntegrations('http://x', AUTH, 'pw')).toBeNull();
+  });
+
+  it('steps by what a page held, because a workspace may cap a page below 100', async () => {
+    // API_Upper_Count_Limit is a setting: a dump with 25 and 60 integrations answered 25,
+    // and a loop stepping by 100 stopped there, leaving 35 posting to the customer.
+    const names = (from: number, n: number) =>
+      Array.from({ length: n }, (_, i) => `hook-${String(from + i)}`);
+    script([page(0, names(0, 25), 60), page(25, names(25, 25), 60), page(50, names(50, 10), 60)]);
+    const all = await listIntegrations('http://x', AUTH, 'pw');
+    expect(all?.length).toBe(60);
+    expect(seen.map((s) => s.params?.offset)).toEqual([0, 25, 50]);
+  });
+
+  it('finds an integration by its exact name and type', async () => {
+    script([
+      [
+        at('integrations.list'),
+        {
+          status: 200,
+          text: JSON.stringify({
+            integrations: [
+              { name: 'houston-outgoing-old', type: 'webhook-outgoing', _id: 'old' },
+              { name: 'houston-outgoing', type: 'webhook-incoming', _id: 'in' },
+              { name: 'houston-outgoing', type: 'webhook-outgoing', _id: 'out' },
+            ],
+            total: 3,
+          }),
+        },
+      ],
+    ]);
+    const found = await findIntegration('http://x', AUTH, 'pw', {
+      name: 'houston-outgoing',
+      type: 'webhook-outgoing',
+    });
+    expect(found?._id).toBe('out');
+  });
+
+  it('creates the outgoing webhook as rocket.cat on every public channel, with a token the admin UI can save', async () => {
+    script([
+      [at('integrations.list'), { status: 200, text: '{"integrations":[],"total":0}' }],
+      [
+        at('integrations.create'),
+        {
+          status: 200,
+          text: '{"success":true,"integration":{"_id":"o1","name":"houston-outgoing"}}',
+        },
+      ],
+    ]);
+    const made = await createOutgoingWebhook('http://x', AUTH, 'pw', {
+      name: 'houston-outgoing',
+      urls: ['http://webhooks:8080/s/outgoing'],
+    });
+    expect(made).toBe('o1');
+    const sent = seen.find((s) => s.url.includes('integrations.create'));
+    expect(sent?.json).toMatchObject({
+      type: 'webhook-outgoing',
+      name: 'houston-outgoing',
+      enabled: true,
+      username: 'rocket.cat',
+      channel: 'all_public_channels',
+      event: 'sendMessage',
+      urls: ['http://webhooks:8080/s/outgoing'],
+      scriptEnabled: false,
+      retryFailedCalls: true,
+    });
+    expect((sent?.json as { token: string }).token).toMatch(/^[0-9a-f]{48}$/u);
+    expect(sent?.headers['x-2fa-method']).toBe('password');
+  });
+
+  it('reuses an outgoing webhook of that name rather than making a second', async () => {
+    script([
+      [
+        at('integrations.list'),
+        {
+          status: 200,
+          text: '{"integrations":[{"name":"houston-outgoing","type":"webhook-outgoing","_id":"o1"}],"total":1}',
+        },
+      ],
+    ]);
+    expect(
+      await createOutgoingWebhook('http://x', AUTH, 'pw', {
+        name: 'houston-outgoing',
+        urls: ['u'],
+      }),
+    ).toBe('o1');
+    expect(seen.some((s) => s.url.includes('integrations.create'))).toBe(false);
+  });
+
+  it('repoints an integration by resending only the fields the update schema takes', async () => {
+    // The update writes EVERY field from its body, refuses unknown keys and an empty token,
+    // and wants the channel list as the comma-joined string the form sends.
+    script([[at('integrations.update'), { status: 200, text: '{"success":true}' }]]);
+    const stored = {
+      _id: 'jira',
+      type: 'webhook-outgoing',
+      name: 'Jira',
+      enabled: true,
+      username: 'rocket.cat',
+      userId: 'rocket.cat-id',
+      channel: ['#general', '#x'],
+      event: 'sendMessage',
+      urls: ['https://jira.example.com/hook'],
+      triggerWords: ['jira'],
+      scriptEnabled: true,
+      script: 'class Script {}',
+      scriptCompiled: 'compiled',
+      scriptEngine: 'isolated-vm',
+      retryFailedCalls: true,
+      retryCount: 6,
+      _createdAt: '2026-01-01',
+      _createdBy: { _id: 'u' },
+    };
+    const ok = await updateOutgoingUrls('http://x', AUTH, 'pw', stored, [
+      'http://webhooks:8080/s/captured/Jira?from=x',
+    ]);
+    expect(ok).toBe(true);
+    // A PUT, as Rocket.Chat registers it (API.v1.put): a POST is refused on every version,
+    // which a live 8.6.2 said and this stub could not.
+    expect(seen[0]?.method).toBe('PUT');
+    const sent = seen[0]?.json as Record<string, unknown>;
+    expect(sent).toMatchObject({
+      type: 'webhook-outgoing',
+      integrationId: 'jira',
+      name: 'Jira',
+      channel: '#general,#x',
+      urls: ['http://webhooks:8080/s/captured/Jira?from=x'],
+      triggerWords: ['jira'],
+      scriptEnabled: true,
+      script: 'class Script {}',
+      retryCount: 6,
+    });
+    expect(String(sent.token)).toMatch(/^[0-9a-f]{48}$/u);
+    for (const key of [
+      '_id',
+      'userId',
+      '_createdAt',
+      '_createdBy',
+      'scriptCompiled',
+      'scriptEngine',
+    ]) {
+      expect(sent).not.toHaveProperty(key);
+    }
+    script([], { status: 400, ok: false, text: '{"success":false}' });
+    expect(await updateOutgoingUrls('http://x', AUTH, 'pw', stored, ['u'])).toBe(false);
   });
 
   it('keeps retrying a SAML descriptor while the IdP boots, then reads one line', async () => {

@@ -24,7 +24,7 @@ import { APPLY_TIMEOUT, CONTEXT, isOurs } from './kube/names';
 import { namespaceFor } from './kube/namespace';
 import * as rcapi from './rcapi';
 import { composeExec } from './runner/engine';
-import { adminPass, type Metadata } from './runner/record';
+import { adminPass, type Metadata, updateMeta } from './runner/record';
 import * as topology from './topology';
 
 /**
@@ -682,6 +682,385 @@ async function prVoiceUsers(
   return true;
 }
 
+/** The Omnichannel webhook's event switches, for a workspace that cannot list its settings. */
+const WEBHOOK_EVENT_SETTINGS: readonly string[] = [
+  'start',
+  'close',
+  'chat_taken',
+  'chat_queued',
+  'forward',
+  'offline_msg',
+  'visitor_message',
+  'agent_message',
+].map((event) => `Livechat_webhook_on_${event}`);
+
+/** The `?from=` a capture wrote into a repointed URL: where the call was bound. */
+function capturedFrom(url: string): string {
+  try {
+    return new URL(url).searchParams.get('from') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** The JSON the inbox answers: not empty, and without `text`, so Rocket.Chat posts nothing back. */
+const INBOX_ANSWER = '{"captured":true}';
+
+/**
+ * What the receiver says of a session: fit to be the inbox (200 and a body), made for
+ * something else (an engineer's 500 or delay), the receiver's own creation on an unknown
+ * uuid (200 and nothing else: the empty body Rocket.Chat reads as a failed call), gone, or
+ * not answering.
+ */
+type SessionState = 'ok' | 'other' | 'auto' | 'missing' | 'unreachable';
+
+async function sessionState(api: string, uuid: string): Promise<SessionState> {
+  try {
+    const [status, text] = await rcapi.call(
+      api,
+      'GET',
+      `/api/session/${encodeURIComponent(uuid)}`,
+      {
+        timeoutMs: 5_000,
+      },
+    );
+    if (status === 404) return 'missing';
+    if (status !== 200) return 'unreachable';
+    const parsed = JSON.parse(text) as {
+      response?: { status_code?: unknown; response_body_base64?: unknown };
+    };
+    const code = parsed.response?.status_code;
+    const body = parsed.response?.response_body_base64;
+    if (code !== 200) return 'other';
+    return typeof body === 'string' && body !== '' ? 'ok' : 'auto';
+  } catch {
+    return 'unreachable';
+  }
+}
+
+async function createSession(api: string): Promise<string | null> {
+  try {
+    const [status, text] = await rcapi.call(api, 'POST', '/api/session', {
+      data: {
+        status_code: 200,
+        headers: [{ name: 'Content-Type', value: 'application/json' }],
+        delay: 0,
+        response_body_base64: Buffer.from(INBOX_ANSWER).toString('base64'),
+      },
+      timeoutMs: 5_000,
+    });
+    const uuid = (JSON.parse(text) as { uuid?: unknown }).uuid;
+    return status < 300 && typeof uuid === 'string' && uuid !== '' ? uuid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The session segment of a URL at the inbox, `http://webhooks:8080/<uuid>/...`; '' elsewhere. */
+function sessionOf(url: string, origin: string): string {
+  if (!url.startsWith(origin)) return '';
+  try {
+    return new URL(url).pathname.split('/')[1] ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function originOf(url: string, fallback: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * The inbox's API: the port the preset published, at the address houston reaches the
+ * workspace by -- with --bind <ip> nothing answers on localhost.
+ */
+function apiOrigin(rootUrl: string, uiUrl: string): string {
+  try {
+    const port = new URL(uiUrl).port;
+    return port === '' ? '' : `http://${new URL(rootUrl).hostname}:${port}`;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The webhooks preset: the inbox's session, the two sample integrations, the Omnichannel
+ * webhook pointed at the inbox, the inbox on the SSRF allowlist, and -- with capture=all --
+ * every other outgoing integration repointed there, the original URL kept in the new one's
+ * query string.
+ *
+ * THE SESSION IS MADE HERE, NOT BY THE FIRST REQUEST: the receiver's auto-created session
+ * answers 200 with an empty body, which Rocket.Chat reads as a failed call and retries four
+ * times, so every message landed five times and the History tab read too-many-retries. One
+ * made through the receiver's API answers JSON. The receiver picks the uuid, so it is
+ * recorded, the recorded one is kept while it still answers, and a lost one (an idle month,
+ * a removed volume) or the auto-created one is replaced and whatever pointed at it
+ * repointed. While the receiver's API cannot be reached nothing is wired: the auto-created
+ * session would bring the retries back.
+ *
+ * Everything is found before it is made, so a ready, an upgrade, a restore and a rebuild
+ * re-run it safely; what Rocket.Chat answered is recorded under `extra.webhooks` for `info`
+ * and the GUI, as the RELATIVE hook path: the host is composed when it is read.
+ *
+ * The rule for the Omnichannel webhook is "wire events only to our inbox, never widen a
+ * foreign one": a URL a customer's dump brought along is left alone (and named) unless
+ * capture=all, because switching more events on would post them to the customer's CRM.
+ */
+async function prWebhooksSetup(
+  meta: Metadata,
+  auth: rcapi.Auth,
+  action: Action,
+  emit: Emit,
+  _sleep: Sleep,
+): Promise<boolean> {
+  // The first build recorded a fixed session in both addresses; the origins are what count.
+  const receiverOrigin = originOf(String(required(action, 'receiver')), config.WEBHOOKS_RECEIVER);
+  const api = apiOrigin(meta.rootUrl, String(getOr(action, 'ui_url', '')));
+  const capture = String(getOr(action, 'capture', 'off')) === 'all';
+  const origin = `${receiverOrigin}/`;
+  const url = meta.rootUrl;
+  const pw = adminPass(meta);
+  const phase = { phase: 'post_ready' as const };
+  let ok = true;
+
+  const states = new Map<string, SessionState>();
+  const stateOf = async (uuid: string): Promise<SessionState> => {
+    const known = states.get(uuid);
+    if (known !== undefined) return known;
+    const state = await sessionState(api, uuid);
+    states.set(uuid, state);
+    return state;
+  };
+
+  const listed = await rcapi.listIntegrations(url, auth, pw, { type: 'webhook-outgoing' });
+  const ours = listed?.find((doc) => doc.name === config.WEBHOOKS_OUTGOING);
+  const current = await rcapi.getSetting(url, auth, pw, 'Livechat_webhookUrl');
+  const currentUrl = typeof current === 'string' ? current : '';
+  // The session a rebuilt record forgot (`up --force` rebuilds `extra`) is the one the
+  // sample integration or the Omnichannel webhook still posts to: the first that still
+  // answers as the inbox is kept, so a rebuild never splits the inbox in two.
+  const recorded = (meta.extra.webhooks as { session?: unknown } | undefined)?.session;
+  const oursUrl = Array.isArray(ours?.urls) ? String(ours.urls[0] ?? '') : '';
+  const candidates = [
+    typeof recorded === 'string' ? recorded : '',
+    sessionOf(oursUrl, origin),
+    sessionOf(currentUrl, origin),
+  ].filter((one) => one !== '');
+  let session = '';
+  for (const one of candidates) {
+    if ((await stateOf(one)) === 'ok') {
+      session = one;
+      break;
+    }
+  }
+  if (session === '') {
+    const made = await createSession(api);
+    if (made === null) {
+      warn(
+        emit,
+        `could not reach the inbox at ${api || 'its port'} to make its session: nothing was wired -- houston ready --name ${meta.name} once the inbox answers`,
+        phase,
+      );
+      return false;
+    }
+    session = made;
+    states.set(made, 'ok');
+  }
+  const receiver = `${origin}${session}`;
+  /** A URL at the inbox whose session is gone or the receiver's own, moved to this one. */
+  const repaired = async (one: string): Promise<string> => {
+    const uuid = sessionOf(one, origin);
+    if (uuid === '' || uuid === session) return one;
+    // An engineer's own session (a 500, a delay) stays; only a lost or empty one moves.
+    const state = await stateOf(uuid);
+    if (state !== 'missing' && state !== 'auto') return one;
+    return `${receiver}${one.slice(origin.length + uuid.length)}`;
+  };
+
+  const outgoing =
+    ours !== undefined
+      ? 'listed'
+      : await rcapi.createOutgoingWebhook(url, auth, pw, {
+          name: config.WEBHOOKS_OUTGOING,
+          urls: [`${receiver}/outgoing`],
+        });
+  if (outgoing === null) {
+    warn(
+      emit,
+      `could not create the '${config.WEBHOOKS_OUTGOING}' integration (is rocket.cat present, and does admin hold manage-outgoing-integrations?)`,
+      phase,
+    );
+    ok = false;
+  }
+  const incoming = await rcapi.createIncomingWebhook(url, auth, pw, {
+    name: config.WEBHOOKS_INCOMING,
+    channel: '#general',
+    alias: 'houston',
+  });
+  if (incoming === null) {
+    warn(
+      emit,
+      `could not create the '${config.WEBHOOKS_INCOMING}' integration (is rocket.cat present, and #general?)`,
+      phase,
+    );
+    ok = false;
+  }
+
+  const failed: string[] = [];
+  const set = async (id: string, value: unknown): Promise<void> => {
+    if (!(await rcapi.setSetting(url, auth, pw, id, value))) failed.push(id);
+  };
+  const atInbox = currentUrl.startsWith(origin);
+  let omnichannel = currentUrl;
+  if (current === null) {
+    // "Could not read" is not "empty": writing over a URL nobody saw could replace a
+    // customer's without a word.
+    warn(
+      emit,
+      'could not read Livechat_webhookUrl: the Omnichannel webhook is left as it is',
+      phase,
+    );
+    ok = false;
+  } else if (currentUrl === '' || atInbox || capture) {
+    const replaced = !atInbox && currentUrl !== '';
+    if (atInbox) {
+      // Ours at a session the receiver lost, or at the auto-created one: moved to this one.
+      omnichannel = await repaired(currentUrl);
+      if (omnichannel !== currentUrl) await set('Livechat_webhookUrl', omnichannel);
+    } else {
+      // The URL it replaced rides along in ?from=, as a captured integration's does, so
+      // `info` can say where the webhook was bound after any rebuild of the record.
+      omnichannel = replaced
+        ? `${receiver}/omnichannel?from=${encodeURIComponent(currentUrl)}`
+        : `${receiver}/omnichannel`;
+      await set('Livechat_webhookUrl', omnichannel);
+      if (replaced)
+        warn(emit, `Omnichannel webhook was ${currentUrl}: now the inbox (capture=all)`, phase);
+    }
+    const token = await rcapi.getSetting(url, auth, pw, 'Livechat_secret_token');
+    if (token === '' || token === false || replaced) {
+      await set('Livechat_secret_token', config.WEBHOOKS_TOKEN);
+    }
+    // The known switches first, then any the workspace lists beyond them: `settings?count=0`
+    // is capped on a workspace without API_Allow_Infinite_Count, and a short list must not
+    // read as "this version has none" -- a switch the version lacks answers null below.
+    const listed = (await rcapi.settingIds(url, auth, pw)) ?? new Set<string>();
+    for (const id of new Set([...WEBHOOK_EVENT_SETTINGS, ...listed])) {
+      // `on_capture` needs navigation-as-message and is not an event of a chat.
+      if (!id.startsWith('Livechat_webhook_on_') || id === 'Livechat_webhook_on_capture') continue;
+      if ((await rcapi.getSetting(url, auth, pw, id)) === false) await set(id, true);
+    }
+  } else {
+    warn(
+      emit,
+      `Omnichannel webhook points at ${currentUrl} and would post every chat event there: --set capture=all repoints it at the inbox`,
+      phase,
+    );
+  }
+  const allow = await rcapi.getSetting(url, auth, pw, 'SSRF_Allowlist');
+  if (typeof allow === 'string') {
+    // Absent (null) before 8.2.0, where nothing it guards reaches a private host anyway.
+    const hosts = allow
+      .split(/[\r\n,]+/u)
+      .map((host) => host.trim())
+      .filter((host) => host !== '');
+    if (!hosts.includes('webhooks')) await set('SSRF_Allowlist', [...hosts, 'webhooks'].join('\n'));
+  }
+  if (failed.length > 0) {
+    warn(emit, `these settings did not take: ${failed.join(', ')}`, phase);
+    ok = false;
+  }
+
+  const captured: { name: string; from: string[] }[] = [];
+  if (listed === null) {
+    warn(emit, 'could not list the outgoing integrations', phase);
+    ok = false;
+  } else {
+    const scripted: string[] = [];
+    const resave = async (
+      doc: Record<string, unknown>,
+      name: string,
+      target: string[],
+      was: string,
+    ): Promise<boolean> => {
+      if (await rcapi.updateOutgoingUrls(url, auth, pw, doc, target)) {
+        info(emit, `repointed '${name}' at the inbox (was ${was})`, phase);
+        if (doc.scriptEnabled === true && String(doc.script ?? '').trim() !== '')
+          scripted.push(name);
+        return true;
+      }
+      warn(
+        emit,
+        `could not repoint '${name}' (Rocket.Chat refused the update: a deleted user or channel?)`,
+        phase,
+      );
+      ok = false;
+      return false;
+    };
+    for (const doc of listed) {
+      const name = String(doc.name ?? '');
+      const urls = Array.isArray(doc.urls) ? doc.urls.map(String) : [];
+      if (urls.length === 0) continue;
+      if (urls.every((one) => one.startsWith(origin))) {
+        const fixed: string[] = [];
+        for (const one of urls) fixed.push(await repaired(one));
+        if (fixed.some((one, i) => one !== urls[i]))
+          await resave(doc, name, fixed, 'a session the inbox no longer has');
+        if (name !== config.WEBHOOKS_OUTGOING)
+          captured.push({ name, from: fixed.map(capturedFrom).filter((one) => one !== '') });
+        continue;
+      }
+      if (name === config.WEBHOOKS_OUTGOING || !capture) continue;
+      const target = urls.map(
+        (one) => `${receiver}/captured/${encodeURIComponent(name)}?from=${encodeURIComponent(one)}`,
+      );
+      if (await resave(doc, name, target, urls.join(', '))) captured.push({ name, from: urls });
+    }
+    if (scripted.length > 0) {
+      warn(
+        emit,
+        `re-saved with a script: ${scripted.join(', ')} -- from Rocket.Chat 9.0.0 a script runs as written, in strict mode (docs.rocket.chat/docs/integrations#script-compatibility)`,
+        phase,
+      );
+    }
+  }
+
+  const hooks = {
+    session,
+    incoming: incoming ?? '',
+    outgoing_name: config.WEBHOOKS_OUTGOING,
+    omnichannel,
+    captured,
+  };
+  try {
+    await updateMeta(meta.name, (recorded) => {
+      recorded.extra.webhooks = hooks;
+    });
+    meta.extra.webhooks = hooks;
+  } catch {
+    warn(
+      emit,
+      `could not record the webhook URLs in repro.json: houston ready --name ${meta.name} writes them`,
+      phase,
+    );
+    ok = false;
+  }
+
+  const where = omnichannel.startsWith(origin) ? 'at the inbox' : `left at ${omnichannel}`;
+  const count = captured.length > 0 ? `; ${String(captured.length)} integration(s) captured` : '';
+  const inbox = `${api}/s/${session}`;
+  info(
+    emit,
+    `Webhooks: inbox ${inbox} (on the machine running houston); '${config.WEBHOOKS_OUTGOING}' posts every public-channel message there; Omnichannel webhook ${where}${count} -- houston info --name ${meta.name} prints the incoming curl.`,
+    phase,
+  );
+  return ok;
+}
+
 export type Handler = (
   meta: Metadata,
   auth: rcapi.Auth,
@@ -704,6 +1083,7 @@ export const POST_READY_ACTIONS: Record<string, Handler> = {
   livechat_setup: prLivechatSetup,
   e2ee_users: prE2eeUsers,
   voice_users: prVoiceUsers,
+  webhooks_setup: prWebhooksSetup,
 };
 
 const BUILTIN_ACTIONS: Readonly<Record<string, Handler>> = Object.freeze({

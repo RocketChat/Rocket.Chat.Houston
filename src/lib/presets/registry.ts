@@ -46,6 +46,7 @@ export const DYNAMIC_PRESETS: readonly string[] = Object.freeze([
   's3_minio',
   'saml',
   'voice',
+  'webhooks',
 ]);
 
 /** Register the builder owned by a dynamic preset module. */

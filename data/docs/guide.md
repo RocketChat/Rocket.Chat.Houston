@@ -104,12 +104,14 @@ houston up --version 8.5.1 --name ticket-1234 --preset ldap --wait
 | `livechat` | Omnichannel, an agent and a demo page with the widget | the widget, CORS, routing |
 | `e2ee` | end-to-end encryption switched on, and three test users | encrypted DMs, rooms and files ([guide](e2ee.md)) |
 | `voice` | two test users for Voice calls; `sip_integration=on` adds Drachtio and FreeSWITCH; `pbx=on` a lab PBX | calls between users, the SIP integration, PBX calls ([guide](voice.md)) |
+| `webhooks` | a web inbox (webhook-tester) every outgoing integration call and Omnichannel webhook lands in, and two sample integrations | integrations, webhooks and their scripts; a customer dump's real endpoints (`--set capture=all`) ([below](#webhooks)) |
 
 For `ldap`, `saml` and `oidc`, sign in as **`user1` / `user1`**. `houston info` lists
 each preset's consoles and logins.
 
 Those consoles prefer these ports on this machine: phpLDAPadmin 8082, Mailpit 8025,
-Keycloak 8081 or 8085, MinIO 9000 and 9001, the livechat demo 8090. The first workspace
+Keycloak 8081 or 8085, MinIO 9000 and 9001, the livechat demo 8090, the webhook inbox
+8086. The first workspace
 with a preset gets them. Another workspace with the same preset, yours or a colleague's,
 gets the next free port, and keeps it through stop, start, `up --force` and upgrade. If
 something else took that port while the workspace was stopped, `up --force` moves it to a
@@ -169,6 +171,36 @@ Things to know:
   instance gets the preset's settings. Messages reach the other instances live only
   with an Enterprise license, Rocket.Chat's scalability module; without one they show
   after a reload.
+
+### Webhooks
+
+`--preset webhooks` starts a web inbox for HTTP requests (webhook-tester) and wires
+Rocket.Chat to it: a `houston-outgoing` integration posts every public-channel message
+there, a `houston-incoming` integration takes POSTs into `#general` (`houston info` prints
+its URL and a curl to paste), and the Omnichannel webhook points at it with the token
+`houston`, so with `--preset livechat` every chat event lands there too. Post a message,
+open the inbox, read the request. The inbox answers 200 with `{"captured": true}`, which
+Rocket.Chat reads as success; for a failing or slow endpoint click `New URL` in its UI, set
+a 500 or a delay, untick `Destroy current session` (or houston's inbox goes with it) and
+paste the new URL into the integration with the host replaced by `webhooks:8080` (the inbox
+UI says `localhost`; Rocket.Chat reaches it inside the workspace network). Admin →
+Workspace → Integrations →
+History shows each call Rocket.Chat made and what came back, from any machine.
+
+The inbox UI is on the machine running houston only (`http://localhost:8086/s/…`): it is a
+single-page app with absolute paths that would collide with Rocket.Chat's, so it is not
+served under the HTTPS name. From elsewhere, `ssh -L 8086:127.0.0.1:8086 <host>`, or
+`--bind`. It keeps the last 128 requests on disk: stop, start, restart, upgrade and
+`up --force` keep them; `down --volumes` removes them. An inbox idle for 31 days loses its
+session; `houston ready` makes a new one.
+
+A restored customer backup keeps posting to the customer's real services. `--set
+capture=all` repoints every outgoing integration, and the Omnichannel webhook, at the
+inbox and lists the original URLs under Webhooks in `houston info`; each repointed URL
+keeps the original in its `?from=` query, so the inbox shows where a call was bound. From
+Rocket.Chat 9.0.0 integration scripts run as written (strict mode): one saved earlier keeps
+working until it is edited and saved again, which a repoint is; the docs' Script
+compatibility section says what to change.
 
 ### Your own presets
 
@@ -434,6 +466,8 @@ they work from any browser, not only on this machine:
 | `/phpldapadmin/` | phpLDAPadmin, to browse and edit the directory (`ldap`, OpenLDAP and AD) |
 
 `houston info` and the GUI link to them. Grafana is at `/grafana/` (see [Monitoring](#monitoring)).
+The `webhooks` inbox has no path here: it answers only on its own port on the machine
+running houston (see [Webhooks](#webhooks)).
 
 ```bash
 houston edge status              # is it running, which names, can it reach each one

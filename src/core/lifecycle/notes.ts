@@ -27,9 +27,16 @@ import { podRows } from '../kube/status';
 import { OPERATOR_MIN_MONGO, OPERATOR_NAMESPACE } from '../kube/operator';
 import { ownedKubeconfig } from '../kube/exec';
 import * as paths from '../runner/paths';
-import { type Metadata, grafanaPortOf, prometheusPortOf, sidePortsOf } from '../runner/record';
+import {
+  type Metadata,
+  externalUrl,
+  grafanaPortOf,
+  prometheusPortOf,
+  sidePortsOf,
+} from '../runner/record';
 import { MODE_ACME } from '../tls';
 import * as topology from '../topology';
+import { presetPorts } from '../../lib/presets/common';
 
 /** One field of a note group: a label and a value, rendered as a table row. */
 export type NoteRow = readonly [string, unknown];
@@ -171,7 +178,7 @@ export function localUrlNote(meta: Metadata, scenario: readonly NoteGroup[]): No
     return [];
   }
   // BOUND TO ONE ADDRESS, the ports are published there alone, and houston calls the
-  // workspace by it (`request.callHost`): `localhost` answers nothing, on this box either.
+  // workspace by it (`callHost`): `localhost` answers nothing, on this box either.
   const direct = urlHostname(meta.rootUrl);
   const only = direct !== '' && direct !== 'localhost' ? direct : '';
   const host = only || urlHostname(advertised) || '<this-box>';
@@ -615,6 +622,7 @@ export async function kubernetesNoteGroups(meta: Metadata): Promise<NoteGroup[]>
     mongoGroup,
     ...forward,
     ...reach,
+    ...webhooksGroup(meta),
     ...howToWorkWithIt(meta, ns, context, release, root, port, addr, shared),
     noteGroup('Monitoring', {
       rows: isTruthy(extra.monitoring)
@@ -678,7 +686,92 @@ export function composeNoteGroups(meta: Metadata): NoteGroup[] {
       }),
     );
   }
+  groups.push(...webhooksGroup(meta));
   return groups;
+}
+
+/**
+ * The webhook inbox's page, at the session the receiver chose, on the port the workspace
+ * holds; '' until post-ready recorded the session. The one place the address is composed:
+ * the links row and the Webhooks group both read it. The host is the record's own root
+ * URL's, which the create composed from the bind (`request.callHost`): the side ports are
+ * published where Rocket.Chat's is.
+ */
+export function inboxUrl(meta: Metadata): string {
+  const session = bag(bag(meta.extra).webhooks).session;
+  if (typeof session !== 'string' || session === '' || !namesOf(meta.preset).includes('webhooks')) {
+    return '';
+  }
+  const port = presetPorts('webhooks', sidePortsOf(meta))[0];
+  if (port === undefined) return '';
+  const host = urlHostname(meta.rootUrl) || 'localhost';
+  return `http://${host}:${String(port)}/s/${encodeURIComponent(session)}`;
+}
+
+/**
+ * What the webhooks preset's post-ready recorded: the inbox page and the incoming hook as
+ * places (the line shape the panel turns into a link row), the curl to paste, where the
+ * Omnichannel webhook points, and what capture=all repointed. Absent until a ready run
+ * wrote `extra.webhooks`. The inbox link is the same the links row carries: the session
+ * the receiver chose, on the port the workspace holds.
+ */
+export function webhooksGroup(meta: Metadata): NoteGroup[] {
+  const hooks = bag(bag(meta.extra).webhooks);
+  if (Object.keys(hooks).length === 0) return [];
+  const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+  const base = externalUrl(meta).replace(/\/+$/u, '');
+  const incoming = text(hooks.incoming);
+  const omnichannel = text(hooks.omnichannel);
+  const body: string[] = [];
+  const commands: string[] = [];
+  const inbox = inboxUrl(meta);
+  if (inbox !== '') {
+    body.push(
+      `Webhook inbox (every outgoing integration call and Omnichannel event lands here): ${inbox}`,
+    );
+  }
+  if (incoming !== '') {
+    body.push(
+      `Incoming hook (POST JSON {"text": …}; posts as rocket.cat in #general): ${base}${incoming}`,
+    );
+    commands.push(
+      `curl -s -X POST -H 'Content-Type: application/json' -d '{"text":"hello from a webhook"}' ${base}${incoming}`,
+    );
+  }
+  body.push(
+    `Outgoing: '${text(hooks.outgoing_name) || config.WEBHOOKS_OUTGOING}' posts every public-channel message to the inbox; Admin → Workspace → Integrations → History shows each attempt.`,
+  );
+  // A customer's URL is a FACT in a row, never prose: the panel links a URL in prose, and a
+  // click on the customer's real endpoint is a request to it.
+  const rows: [string, unknown][] = [];
+  if (omnichannel.startsWith(`${config.WEBHOOKS_RECEIVER}/`)) {
+    // capture=all keeps the URL it replaced in ?from=, as it does for an integration.
+    let from: string;
+    try {
+      from = new URL(omnichannel).searchParams.get('from') ?? '';
+    } catch {
+      from = '';
+    }
+    if (from !== '') rows.push(['Omnichannel webhook', `at the inbox — was ${from}`]);
+    else
+      body.push('Omnichannel webhook: at the inbox (/omnichannel; fires once Omnichannel is on).');
+  } else if (omnichannel === '') {
+    body.push('Omnichannel webhook: not set.');
+  } else {
+    rows.push([
+      'Omnichannel webhook',
+      `left at ${omnichannel} (--set capture=all repoints it at the inbox)`,
+    ]);
+  }
+  for (const one of Array.isArray(hooks.captured) ? hooks.captured : []) {
+    const entry = bag(one);
+    const from = Array.isArray(entry.from) ? entry.from.map(String) : [];
+    rows.push([
+      'Repointed at the inbox (capture=all)',
+      `${text(entry.name)} — was ${from.join(', ') || 'unknown'}`,
+    ]);
+  }
+  return [noteGroup('Webhooks', { rows, body, commands })];
 }
 
 /** Every group this workspace has, scenario first. The one entry point. */

@@ -23,6 +23,7 @@ const BUILT_IN = [
   's3_minio',
   'saml',
   'voice',
+  'webhooks',
 ];
 
 function refusal(fn: () => unknown): string {

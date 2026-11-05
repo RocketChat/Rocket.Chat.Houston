@@ -1486,6 +1486,63 @@ describe('roles and ownership', () => {
     expect(own.json()).toMatchObject({ login: { password: secret }, may_destroy: true });
   });
 
+  it('hides the incoming webhook token from someone who may only look', async () => {
+    // The hook posts as rocket.cat on a workspace that may be bound beyond loopback: the
+    // token is for the owner's `info`, not for every member's panel.
+    const line = 'Incoming hook (POST JSON): http://x/hooks/abc/t0k3n';
+    jest.mocked(payload.detail).mockImplementation(
+      async (name) =>
+        ({
+          name,
+          login: null,
+          notes: [line],
+          note_groups: [
+            {
+              title: 'Webhooks',
+              body: [line],
+              // A customer's endpoints carry their own secrets in the path or query.
+              rows: [
+                [
+                  'Repointed at the inbox (capture=all)',
+                  'Jira — was https://hooks.example.com/services/T1/B2/s3cret',
+                ],
+                [
+                  'Omnichannel webhook',
+                  'left at https://crm.example.com/hook?token=s3cret (--set capture=all repoints it at the inbox)',
+                ],
+              ],
+              commands: [`curl -X POST ${line.split(': ')[1] ?? ''}`],
+            },
+          ],
+        }) as never,
+    );
+    jest
+      .mocked(inspect.describe)
+      .mockImplementation(async (name) => ({ name, login: null }) as never);
+    await workspace('alices-box', 'alice');
+    await workspace('bobs-box', 'bob');
+    await as('bob');
+    const theirs = await get('/api/repros/alices-box/detail');
+    expect(theirs.statusCode).toBe(200);
+    expect(theirs.body).not.toContain('t0k3n');
+    expect(theirs.json().notes).toEqual(['Incoming hook (POST JSON): http://x/hooks/abc/********']);
+    expect(theirs.json().note_groups[0].commands).toEqual([
+      'curl -X POST http://x/hooks/abc/********',
+    ]);
+    // The customer's endpoints keep their host and lose their path and query.
+    expect(theirs.body).not.toContain('s3cret');
+    expect(theirs.json().note_groups[0].rows).toEqual([
+      ['Repointed at the inbox (capture=all)', 'Jira — was https://hooks.example.com/********'],
+      [
+        'Omnichannel webhook',
+        'left at https://crm.example.com/******** (--set capture=all repoints it at the inbox)',
+      ],
+    ]);
+    const own = await get('/api/repros/bobs-box/detail');
+    expect(own.body).toContain('t0k3n');
+    expect(own.body).toContain('s3cret');
+  });
+
   it('leaves the CLI default to an admin, it being everybody’s', async () => {
     await workspace('bobs-box', 'bob');
     await as('bob');

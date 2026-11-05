@@ -298,14 +298,14 @@ export function reproLinks(meta: Metadata): { label: string; url: string; kind: 
     const ports = linked.length > 0 ? presetPorts(name, held) : [];
     for (const [label, idx] of linked) {
       if (idx < ports.length) {
-        links.push({
-          label,
-          url: `http://${host}:${String(ports[idx])}`,
-          kind: 'sidecar',
-        });
+        links.push({ label, url: `http://${host}:${String(ports[idx])}`, kind: 'sidecar' });
       }
     }
   }
+  // The webhook inbox, at the session the receiver chose: linked once post-ready recorded
+  // it, because the receiver's root page would open a new, empty one.
+  const inbox = notes.inboxUrl(meta);
+  if (inbox !== '') links.push({ label: 'Webhook inbox', url: inbox, kind: 'sidecar' });
   // ldap's OWN Keycloak, when it federates the directory (`--set idp=saml|oidc`): it is
   // published on the IdP preset's port, and linked by preset name only, so the console that
   // holds the directory's SSO users had no link -- unless HTTPS added its path.

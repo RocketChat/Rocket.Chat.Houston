@@ -225,12 +225,21 @@ function lookOnly(d: Record<string, unknown>): Record<string, unknown> {
   const login = d.login as { password?: unknown } | null | undefined;
   const secret = typeof login?.password === 'string' ? login.password : '';
   const out: Record<string, unknown> = { ...d, login: null, ...('env' in d ? { env: [] } : {}) };
-  if (secret === '') return out;
   // In the notes' text only, where it is spelled out: a password restored from a bundle can
   // be any string, and replaced across the document a one-letter one rewrote keys and names.
+  // An incoming webhook's token (`/hooks/<id>/<token>`) is masked the same way: it posts as
+  // rocket.cat on a workspace that may be bound beyond loopback, and it is in the owner's
+  // `info` for whoever may change the workspace.
+  // And a customer's own endpoints, which the webhooks preset lists as where a captured
+  // integration or the Omnichannel webhook WAS bound: their path and query carry their
+  // secrets (a Slack hook's, a CRM's token), so a viewer sees the host and no more.
+  const mask = (text: string): string =>
+    (secret === '' ? text : text.replaceAll(secret, REDACTED))
+      .replace(/\/hooks\/([^\s/'"]+)\/[^\s'"]+/gu, `/hooks/$1/${REDACTED}`)
+      .replace(/(\bwas |\bleft at )(https?:\/\/[^\s/]+)\/[^\s)]*/gu, `$1$2/${REDACTED}`);
   const hidden = (value: unknown): unknown =>
     JSON.parse(JSON.stringify(value), (_key, text: unknown) =>
-      typeof text === 'string' ? text.replaceAll(secret, REDACTED) : text,
+      typeof text === 'string' ? mask(text) : text,
     ) as unknown;
   for (const key of ['notes', 'note_groups'] as const) {
     if (key in out) out[key] = hidden(out[key]);

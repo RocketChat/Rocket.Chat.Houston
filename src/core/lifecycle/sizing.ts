@@ -34,6 +34,7 @@ export const PRESET_MB: Readonly<Record<string, number>> = Object.freeze({
   livechat: 60,
   'multi-instance': 400,
   email: 40,
+  webhooks: 30,
 });
 
 /**

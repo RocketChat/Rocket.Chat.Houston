@@ -94,6 +94,7 @@ export const PRESET_PORTS: PortMap = Object.freeze({
   s3_minio: Object.freeze([9000, 9001]), // MinIO S3 API + console
   livechat: Object.freeze([8090]), // demo "customer website" embedding the widget
   ldap: Object.freeze([8082]), // phpLDAPadmin -- browse the directory the preset seeded
+  webhooks: Object.freeze([8086]), // webhook-tester, the inbox every outgoing call lands in
 });
 
 /**
@@ -125,6 +126,21 @@ export const MONGO_OPLOG_URL = 'mongodb://mongodb:27017/local?replicaSet=rs0';
 
 /** Key under `Metadata.extra` where the email preset records Mailpit's URL. */
 export const EXTRA_MAILPIT_URL = 'mailpit_url';
+
+/**
+ * The webhooks preset's receiver (webhook-tester): the compose/Kubernetes DNS name
+ * Rocket.Chat reaches it at, the Service being named after the service. It records any
+ * request whose path starts with a session's uuid; post-ready makes the session through
+ * its API (answering JSON: the kind the receiver makes by itself answers an empty body,
+ * a failed call to Rocket.Chat) and records the uuid the receiver chose. Here, below every
+ * preset and core module, so the post-ready action and the lifecycle import no builder.
+ */
+export const WEBHOOKS_RECEIVER = 'http://webhooks:8080';
+/** The sample integrations post-ready creates, found again by name on every re-run. */
+export const WEBHOOKS_OUTGOING = 'houston-outgoing';
+export const WEBHOOKS_INCOMING = 'houston-incoming';
+/** The Omnichannel webhook's secret, sent as X-RocketChat-Livechat-Token. */
+export const WEBHOOKS_TOKEN = 'houston';
 
 /**
  * Key under `Metadata.extra` naming the runtime a workspace runs on. ABSENT means

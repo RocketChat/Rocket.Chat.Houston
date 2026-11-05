@@ -87,6 +87,10 @@ async function post(url: string, options: RequestOptions = {}): Promise<HttpResp
   return await rcHttp.request(url, { ...options, method: 'POST' });
 }
 
+async function put(url: string, options: RequestOptions = {}): Promise<HttpResponse> {
+  return await rcHttp.request(url, { ...options, method: 'PUT' });
+}
+
 /** GET /api/info (public). The JSON, or null if it is not serving. */
 export async function apiInfo(
   rootUrl: string,
@@ -638,9 +642,74 @@ export async function generatePat(
   throw new Error(`could not create PAT: ${said(first)}`);
 }
 
+/** The headers every integration call sends: the session, JSON, and the password 2FA method. */
+async function integrationHeaders(auth: Auth, password: string): Promise<Record<string, string>> {
+  return {
+    ...authHeaders(auth),
+    'Content-Type': 'application/json',
+    ...(await password2faHeaders(password)),
+  };
+}
+
+/** 48 hex characters, the shape Rocket.Chat's own form gives an outgoing integration. */
+async function newIntegrationToken(): Promise<string> {
+  const crypto = await import('node:crypto');
+  return crypto.randomBytes(24).toString('hex');
+}
+
 /**
- * Create (or reuse) an incoming-webhook integration; returns its POST path
- * (`/hooks/<id>/<token>`) or null. Used by the loadtest `webhook` scenario.
+ * Every integration, page by page (`count=100`), optionally of one `type`; null when the
+ * list could not be read. Filtered here rather than by the `name`/`type` query params,
+ * which older releases ignore.
+ */
+export async function listIntegrations(
+  rootUrl: string,
+  auth: Auth,
+  password: string,
+  { type = '', timeoutMs = 15_000 }: { type?: string; timeoutMs?: number } = {},
+): Promise<Record<string, unknown>[] | null> {
+  const headers = await integrationHeaders(auth, password);
+  const out: Record<string, unknown>[] = [];
+  try {
+    // Stepped by what a page HELD: API_Upper_Count_Limit is a setting, and a dump that caps
+    // a page at 25 answered 25 to count=100. 50 pages: more than 5,000 is not a repro.
+    let offset = 0;
+    for (let pages = 0; pages < 50; pages += 1) {
+      const resp = await get(`${trimEnd(rootUrl)}/api/v1/integrations.list`, {
+        headers,
+        params: { count: 100, offset },
+        timeoutMs,
+      });
+      if (resp.status !== 200) return null;
+      const parsed = body(resp);
+      const page = list(parsed.integrations);
+      out.push(...page);
+      offset += page.length;
+      const total = typeof parsed.total === 'number' ? parsed.total : 0;
+      if (page.length === 0 || (total > 0 ? out.length >= total : page.length < 100)) break;
+    }
+  } catch {
+    return null;
+  }
+  return type === '' ? out : out.filter((one) => one.type === type);
+}
+
+/** The integration of exactly this `name` and `type`, or null (also when the list failed). */
+export async function findIntegration(
+  rootUrl: string,
+  auth: Auth,
+  password: string,
+  { name, type, timeoutMs = 15_000 }: { name: string; type: string; timeoutMs?: number },
+): Promise<Record<string, unknown> | null> {
+  const all = await listIntegrations(rootUrl, auth, password, { type, timeoutMs });
+  return all?.find((one) => one.name === name) ?? null;
+}
+
+/**
+ * Find, else create, an incoming-webhook integration; returns its POST path
+ * (`/hooks/<id>/<token>`) or null. Used by the loadtest `webhook` scenario and the webhooks
+ * preset. Looked up FIRST: Rocket.Chat accepts a duplicate name, so creating and looking only
+ * on refusal added a hook on every run.
  */
 export async function createIncomingWebhook(
   rootUrl: string,
@@ -649,58 +718,175 @@ export async function createIncomingWebhook(
   {
     channel = '#general',
     name = 'houston-loadtest-hook',
+    alias = 'loadtest',
     timeoutMs = 15_000,
-  }: { channel?: string; name?: string; timeoutMs?: number } = {},
+  }: { channel?: string; name?: string; alias?: string; timeoutMs?: number } = {},
 ): Promise<string | null> {
-  const base = `${trimEnd(rootUrl)}/api/v1`;
-  const headers = {
-    ...authHeaders(auth),
-    'Content-Type': 'application/json',
-    ...(await password2faHeaders(password)),
-  };
-  const payload = {
-    type: 'webhook-incoming',
-    name,
-    enabled: true,
-    username: 'rocket.cat',
-    channel,
-    scriptEnabled: false,
-    script: '',
-    alias: 'loadtest',
-    avatar: '',
-    emoji: '',
+  const hookPath = (integration: Record<string, unknown>): string | null => {
+    const id = String(integration._id ?? '');
+    const token = String(integration.token ?? '');
+    return id !== '' && token !== '' ? `/hooks/${id}/${token}` : null;
   };
   try {
-    const created = await post(`${base}/integrations.create`, {
-      headers,
-      json: payload,
+    const found = await findIntegration(rootUrl, auth, password, {
+      name,
+      type: 'webhook-incoming',
+      timeoutMs,
+    });
+    if (found !== null) return hookPath(found);
+    const created = await post(`${trimEnd(rootUrl)}/api/v1/integrations.create`, {
+      headers: await integrationHeaders(auth, password),
+      json: {
+        type: 'webhook-incoming',
+        name,
+        enabled: true,
+        username: 'rocket.cat',
+        channel,
+        scriptEnabled: false,
+        script: '',
+        alias,
+        avatar: '',
+        emoji: '',
+      },
       timeoutMs,
     });
     const madeBody = body(created);
     if (created.status === 200 && madeBody.success === true) {
-      const integration = map(madeBody.integration);
-      const id = String(integration._id ?? '');
-      const token = String(integration.token ?? '');
-      if (id !== '' && token !== '') return `/hooks/${id}/${token}`;
-    }
-    // Likely already exists from a previous run -- find it by name.
-    const listed = await get(`${base}/integrations.list`, {
-      headers,
-      params: { count: 100 },
-      timeoutMs,
-    });
-    if (listed.status === 200) {
-      for (const integration of list(body(listed).integrations)) {
-        const token = String(integration.token ?? '');
-        if (integration.name === name && token !== '') {
-          return `/hooks/${String(integration._id ?? '')}/${token}`;
-        }
-      }
+      return hookPath(map(madeBody.integration));
     }
   } catch {
     // Best-effort by contract: the scenario runs without a webhook.
   }
   return null;
+}
+
+/**
+ * Find, else create, an outgoing-webhook integration that posts every message of every
+ * public channel to `urls`; returns its id or null. As rocket.cat, the one user with
+ * `message-impersonate` on every workspace; with a token, because the update the admin UI
+ * saves refuses an empty one.
+ */
+export async function createOutgoingWebhook(
+  rootUrl: string,
+  auth: Auth,
+  password: string,
+  {
+    name,
+    urls,
+    channel = 'all_public_channels',
+    event = 'sendMessage',
+    timeoutMs = 15_000,
+  }: {
+    name: string;
+    urls: readonly string[];
+    channel?: string;
+    event?: string;
+    timeoutMs?: number;
+  },
+): Promise<string | null> {
+  try {
+    const found = await findIntegration(rootUrl, auth, password, {
+      name,
+      type: 'webhook-outgoing',
+      timeoutMs,
+    });
+    if (found !== null) return String(found._id ?? '') || null;
+    const created = await post(`${trimEnd(rootUrl)}/api/v1/integrations.create`, {
+      headers: await integrationHeaders(auth, password),
+      json: {
+        type: 'webhook-outgoing',
+        name,
+        enabled: true,
+        username: 'rocket.cat',
+        channel,
+        event,
+        urls: [...urls],
+        token: await newIntegrationToken(),
+        scriptEnabled: false,
+        script: '',
+        retryFailedCalls: true,
+        retryCount: 4,
+        retryDelay: 'powers-of-ten',
+        impersonateUser: false,
+        runOnEdits: false,
+        triggerWordAnywhere: false,
+        alias: 'houston',
+        avatar: '',
+        emoji: '',
+      },
+      timeoutMs,
+    });
+    const madeBody = body(created);
+    if (created.status === 200 && madeBody.success === true) {
+      return String(map(madeBody.integration)._id ?? '') || null;
+    }
+  } catch {
+    // Best-effort by contract: the caller says what is missing.
+  }
+  return null;
+}
+
+/** The fields `integrations.update` takes for an outgoing webhook, and nothing else. */
+const OUTGOING_UPDATE_FIELDS: readonly string[] = [
+  'name',
+  'enabled',
+  'username',
+  'channel',
+  'event',
+  'triggerWords',
+  'triggerWordAnywhere',
+  'token',
+  'scriptEnabled',
+  'script',
+  'runOnEdits',
+  'retryFailedCalls',
+  'retryCount',
+  'retryDelay',
+  'impersonateUser',
+  'targetRoom',
+  'alias',
+  'avatar',
+  'emoji',
+];
+
+/**
+ * Point an outgoing integration at other `urls`, as stored (`integrations.list`'s document).
+ *
+ * The update writes EVERY field from its body, so the whole document goes back -- but only
+ * the fields the schema names (it refuses unknown keys, and `scriptEngine`/`skipTranspile`
+ * exist on some releases only), the channel list as the comma-joined string the form sends,
+ * and a token where the stored one is empty, which the update refuses.
+ */
+export async function updateOutgoingUrls(
+  rootUrl: string,
+  auth: Auth,
+  password: string,
+  integration: Record<string, unknown>,
+  urls: readonly string[],
+  { timeoutMs = 15_000 } = {},
+): Promise<boolean> {
+  const json: Record<string, unknown> = {
+    type: 'webhook-outgoing',
+    integrationId: String(integration._id ?? ''),
+  };
+  for (const key of OUTGOING_UPDATE_FIELDS) {
+    const value = integration[key];
+    if (value !== undefined && value !== null) json[key] = value;
+  }
+  if (Array.isArray(integration.channel)) json.channel = integration.channel.join(',');
+  if (String(json.token ?? '').trim() === '') json.token = await newIntegrationToken();
+  json.urls = [...urls];
+  try {
+    // A PUT: Rocket.Chat registers integrations.update that way, and a POST is refused.
+    const resp = await put(`${trimEnd(rootUrl)}/api/v1/integrations.update`, {
+      headers: await integrationHeaders(auth, password),
+      json,
+      timeoutMs,
+    });
+    return resp.status === 200 && body(resp).success === true;
+  } catch {
+    return false;
+  }
 }
 
 /** A Rocket.Chat setting's current value, or null if unavailable. */

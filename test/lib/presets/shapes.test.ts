@@ -293,6 +293,7 @@ const SHAPES: readonly (readonly [string, Record<string, unknown>])[] = [
   ['ldap', {}],
   ['ldap', { idp: 'saml' }],
   ['ldap', { idp: 'oidc' }],
+  ['webhooks', {}],
 ];
 
 describe('a workspace given shifted ports', () => {
@@ -507,7 +508,7 @@ describe('the Kubernetes renderings', () => {
   it('gives every scenario workload a readiness probe that tests what serves', () => {
     // Without one a pod is Ready the instant its container starts -- forty seconds before
     // Keycloak serves -- and post_ready fetches a descriptor from nothing.
-    for (const name of ['ldap', 'saml', 'oidc', 'email', 's3_minio', 'livechat']) {
+    for (const name of ['ldap', 'saml', 'oidc', 'email', 's3_minio', 'livechat', 'webhooks']) {
       const deployments = kube(name).filter((d) => d.kind === 'Deployment');
       expect({ name, count: deployments.length > 0 }).toEqual({ name, count: true });
       for (const dep of deployments) {

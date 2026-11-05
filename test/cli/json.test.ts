@@ -368,6 +368,7 @@ describe('the capabilities document', () => {
       's3_minio',
       'saml',
       'voice',
+      'webhooks',
       'Ａ-fullwidth',
       '😀-emoji',
     ];

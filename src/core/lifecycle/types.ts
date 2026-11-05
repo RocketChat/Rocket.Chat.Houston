@@ -192,6 +192,11 @@ export const PRESET_LINKS: Readonly<Record<string, readonly (readonly [string, n
     oidc: [['Keycloak', 0]] as const,
     livechat: [['Widget site', 0]] as const,
     ldap: [['phpLDAPadmin', 0]] as const,
+    // No static link: the webhook inbox is linked from the record (`notes.inboxUrl`), because
+    // the receiver chose its session's id and its root page would open a new, empty one. The
+    // empty list still marks the preset as having a browser side UI, which the --bind exposure
+    // warning (`create-docker`) names by membership here.
+    webhooks: [] as const,
   });
 
 /**

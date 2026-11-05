@@ -11,6 +11,10 @@ import {
   KUBE_CONTEXT_KEY,
   MONITOR_PORTS,
   PRESET_PORTS,
+  WEBHOOKS_INCOMING,
+  WEBHOOKS_OUTGOING,
+  WEBHOOKS_RECEIVER,
+  WEBHOOKS_TOKEN,
   approvedAwsAccounts,
   configFile,
   dataPath,
@@ -108,7 +112,19 @@ describe('the port registry', () => {
     expect(PRESET_PORTS.s3_minio).toEqual([9000, 9001]);
     expect(PRESET_PORTS.livechat).toEqual([8090]);
     expect(PRESET_PORTS.ldap).toEqual([8082]);
+    expect(PRESET_PORTS.webhooks).toEqual([8086]);
     expect(MONITOR_PORTS).toEqual([9090, 5050]);
+  });
+
+  it('names the webhook inbox the one way every URL and integration spells it', () => {
+    // The receiver's compose/Kubernetes name. The session is the receiver's choice, made
+    // and recorded by post-ready, so no constant names one.
+    expect(WEBHOOKS_RECEIVER).toBe('http://webhooks:8080');
+    expect([WEBHOOKS_OUTGOING, WEBHOOKS_INCOMING]).toEqual([
+      'houston-outgoing',
+      'houston-incoming',
+    ]);
+    expect(WEBHOOKS_TOKEN).toBe('houston');
   });
 });
 

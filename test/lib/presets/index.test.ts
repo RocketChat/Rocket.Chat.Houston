@@ -60,7 +60,7 @@ function recordedListing(
 }
 
 /** Presets added since the recorded catalogue; each has its own complete contract spec. */
-const NEW_PRESETS: readonly string[] = ['e2ee', 'voice'];
+const NEW_PRESETS: readonly string[] = ['e2ee', 'voice', 'webhooks'];
 
 /** Keep every old row byte-exact. */
 function legacyCatalogue(): Preset[] {
@@ -116,7 +116,7 @@ function expectSame(ours: Preset, expected: Record<string, unknown>): void {
 }
 
 describe('the shipped catalogue', () => {
-  it('preserves the recorded names and adds the E2EE and voice scenarios in sorted order', () => {
+  it('preserves the recorded names and adds the E2EE, voice and webhooks scenarios in sorted order', () => {
     expect(scenarioNames()).toEqual(
       [...(recorded('scenario_names') as string[]), ...NEW_PRESETS].sort(),
     );

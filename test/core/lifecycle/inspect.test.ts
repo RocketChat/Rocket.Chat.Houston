@@ -486,6 +486,25 @@ describe('the links a workspace publishes', () => {
       expect.arrayContaining(['instance 1', 'instance 2', 'instance 3']),
     );
   });
+
+  it('links the webhook inbox to the session the receiver chose, on the port the workspace holds', () => {
+    // The receiver's root page opens a NEW, empty session: the link has to name ours, and
+    // ours exists once post-ready made it and recorded the id the receiver chose.
+    const byLabel = (meta: Metadata) =>
+      Object.fromEntries(reproLinks(meta).map((link) => [link.label, link.url]));
+    expect(byLabel(linksMeta('webhooks'))['Webhook inbox']).toBeUndefined();
+    const hooks = { webhooks: { session: 'ses-9' } };
+    expect(byLabel(linksMeta('webhooks', hooks))['Webhook inbox']).toBe(
+      'http://localhost:8086/s/ses-9',
+    );
+    expect(
+      byLabel(linksMeta('webhooks', { ...hooks, side_ports: { webhooks: [8087] } }))[
+        'Webhook inbox'
+      ],
+    ).toBe('http://localhost:8087/s/ses-9');
+    // A workspace without the preset never links one, whatever its record says.
+    expect(byLabel(linksMeta('email', hooks))['Webhook inbox']).toBeUndefined();
+  });
 });
 
 describe('listing several Kubernetes workspaces', () => {

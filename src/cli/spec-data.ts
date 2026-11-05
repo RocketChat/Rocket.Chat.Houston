@@ -29,7 +29,7 @@ export const COMMAND_SPECS = [
         repeatable: true,
         defaultValue: 'default',
         description:
-          'preset to apply: ldap, saml, oidc, email, s3_minio, livechat, airgapped, e2ee, voice (repeat to combine)',
+          'preset to apply: ldap, saml, oidc, email, s3_minio, livechat, airgapped, e2ee, voice, webhooks (repeat to combine)',
         hidden: false,
         negatablePair: false,
       },

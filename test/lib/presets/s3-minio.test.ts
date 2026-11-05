@@ -29,6 +29,8 @@ describe('s3_minio on Kubernetes', () => {
     ]);
     // One writer at a time on a ReadWriteOnce claim.
     expect(spec.strategy).toEqual({ type: 'Recreate' });
+    // MinIO runs as root and asks for no group: the pod spec gains none.
+    expect(pod.securityContext).toBeUndefined();
   });
 });
 

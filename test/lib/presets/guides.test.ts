@@ -12,6 +12,7 @@ const GUIDED = [
   'saml',
   'voice',
   'multi-instance',
+  'webhooks',
 ];
 
 describe("a preset's guide for the scenario card", () => {

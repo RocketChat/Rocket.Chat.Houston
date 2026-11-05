@@ -98,7 +98,9 @@ const RANKS = [
   // than upward from the registry.
   ['^src/lib/presets/(common|scenario|composite)\\.ts$'],
   ['^src/lib/presets/(keycloak|public|voice-pbx)\\.ts$'],
-  ['^src/lib/presets/(e2ee|email|ldap|livechat|multi-instance|oidc|s3-minio|saml|voice)\\.ts$'],
+  [
+    '^src/lib/presets/(e2ee|email|ldap|livechat|multi-instance|oidc|s3-minio|saml|voice|webhooks)\\.ts$',
+  ],
   ['^src/lib/presets/index\\.ts$'],
   ['^src/seams/(?!exec\\.ts$)'],
   ['^src/core/runner/(paths|locks)\\.ts$'],

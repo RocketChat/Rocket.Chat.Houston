@@ -304,8 +304,11 @@ export interface K8sManifestOptions {
   readonly ui?: Record<string, PortPair>;
   readonly readiness?: Bag;
   readonly workspace?: string;
-  /** A PersistentVolumeClaim mounted at `path`: what the Compose twin keeps in a named volume. */
-  readonly data?: { readonly path: string; readonly size: string };
+  /**
+   * A PersistentVolumeClaim mounted at `path`: what the Compose twin keeps in a named volume.
+   * `fsGroup` makes a fresh claim writable by an image that runs as that uid, not root.
+   */
+  readonly data?: { readonly path: string; readonly size: string; readonly fsGroup?: number };
 }
 
 /**
@@ -373,6 +376,8 @@ export function k8sManifests(options: K8sManifestOptions): string {
       ...((pod.volumes as Bag[] | undefined) ?? []),
       { name: 'data', persistentVolumeClaim: { claimName: claim } },
     ];
+    // A provisioned filesystem is root's, 0755: a non-root image could not write a byte.
+    if (options.data.fsGroup !== undefined) pod.securityContext = { fsGroup: options.data.fsGroup };
     spec.strategy = { type: 'Recreate' };
   }
   docs.push({

@@ -618,3 +618,102 @@ describe("an HTTPS workspace's scenario notes", () => {
     expect(https([])).toContain('MinIO console: http://localhost:9001');
   });
 });
+
+describe('the webhooks group: what post-ready recorded, on both runtimes', () => {
+  const hooks = {
+    session: 'ses-7',
+    incoming: '/hooks/i/t0k3n',
+    outgoing_name: 'houston-outgoing',
+    omnichannel: 'http://webhooks:8080/ses-7/omnichannel',
+    captured: [{ name: 'Jira', from: ['https://jira.example.com/hook'] }],
+  };
+
+  it('prints the incoming hook as a place, a curl to paste, and what was captured', async () => {
+    const docker = titled(
+      await noteGroupsOf(
+        record({
+          name: 'd',
+          project: 'houston-d',
+          preset: 'webhooks',
+          extra: { runtime: 'docker', webhooks: hooks },
+        }),
+      ),
+    );
+    const group = docker.Webhooks;
+    // `Name (what): http://…` is the line the GUI turns into a link row: the inbox at the
+    // session the receiver chose (the links row says the same), then the hook.
+    expect(group?.body[0]).toMatch(/^Webhook inbox \([^)]+\): http:\/\/localhost:8086\/s\/ses-7$/u);
+    expect(group?.body[1]).toMatch(
+      /^Incoming hook \([^)]+\): http:\/\/localhost:3000\/hooks\/i\/t0k3n$/u,
+    );
+    expect(group?.commands[0]).toContain('curl');
+    expect(group?.commands[0]).toContain('http://localhost:3000/hooks/i/t0k3n');
+    const body = group?.body.join('\n') ?? '';
+    expect(body).toContain('houston-outgoing');
+    expect(body).toContain('at the inbox');
+    // The original URL is a FACT in a table row, never prose: the panel links a URL in
+    // prose, and a click on the customer's real endpoint is a request to it.
+    expect(body).not.toContain('jira.example.com');
+    expect(group?.rows).toEqual([
+      ['Repointed at the inbox (capture=all)', 'Jira — was https://jira.example.com/hook'],
+    ]);
+    const k8s = titled(await noteGroupsOf(k8sMeta({ webhooks: hooks })));
+    expect(k8s.Webhooks?.commands[0]).toContain('http://localhost:3000/hooks/i/t0k3n');
+  });
+
+  it('names a webhook left at a foreign URL, and is absent until a ready run recorded the hooks', async () => {
+    const left = titled(
+      await noteGroupsOf(
+        record({
+          name: 'd',
+          project: 'houston-d',
+          preset: 'webhooks',
+          extra: {
+            runtime: 'docker',
+            webhooks: { ...hooks, omnichannel: 'https://crm.example.com/hook', captured: [] },
+          },
+        }),
+      ),
+    );
+    expect(left.Webhooks?.body.join('\n')).not.toContain('crm.example.com');
+    expect(left.Webhooks?.rows).toEqual([
+      [
+        'Omnichannel webhook',
+        'left at https://crm.example.com/hook (--set capture=all repoints it at the inbox)',
+      ],
+    ]);
+    // Captured by capture=all: the original rides in the URL's ?from=, as for integrations.
+    const captured = titled(
+      await noteGroupsOf(
+        record({
+          name: 'd',
+          project: 'houston-d',
+          preset: 'webhooks',
+          extra: {
+            runtime: 'docker',
+            webhooks: {
+              ...hooks,
+              omnichannel: `${hooks.omnichannel}?from=https%3A%2F%2Fcrm.example.com%2Fhook`,
+              captured: [],
+            },
+          },
+        }),
+      ),
+    );
+    expect(captured.Webhooks?.body.join('\n')).not.toContain('Omnichannel webhook');
+    expect(captured.Webhooks?.rows).toEqual([
+      ['Omnichannel webhook', 'at the inbox — was https://crm.example.com/hook'],
+    ]);
+    const none = titled(
+      await noteGroupsOf(
+        record({
+          name: 'd',
+          project: 'houston-d',
+          preset: 'webhooks',
+          extra: { runtime: 'docker' },
+        }),
+      ),
+    );
+    expect(Object.keys(none)).not.toContain('Webhooks');
+  });
+});

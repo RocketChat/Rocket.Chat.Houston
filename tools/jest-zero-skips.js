@@ -168,7 +168,18 @@ const ROOT = path.resolve(__dirname, '..');
 // Plus 4 from the last review: Docker's grouped port ranges read, a typed --set instances
 // beating the carried count, AD and generated directories left unstamped, and the typed --set
 // copy proven to reach the reuse through a whole create.
-const FLOOR = 4812;
+// Plus 31 from the webhooks preset: the builder's shape on both runtimes, moved ports and
+// its words; integrations listed (by what a page held), found, made and repointed through
+// rcapi, with the hook looked up before it is created; the post-ready action's wiring,
+// capture=all, its refusals, a URL it could not read left alone and the event switches
+// from its own list; the inbox link, the Webhooks note group and the hook token and a
+// customer's endpoints hidden from a view-only member; the preset's guide and the pinned port.
+// Plus 7 for the inbox's session: made through the receiver's API with a JSON answer (the
+// auto-created one answers an empty body, a failed call Rocket.Chat retries), kept while it
+// answers, adopted from the sample integration when a rebuilt record forgot it, replaced and
+// repointed when lost, nothing wired while the API cannot be reached, the first build's
+// action still accepted, and the --bind warning naming the inbox UI.
+const FLOOR = 4850;
 
 /** Every authored construct that removes a test from a run or inverts what it asserts. */
 const SKIP_CONSTRUCTS = [

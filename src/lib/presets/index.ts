@@ -46,6 +46,7 @@ import './oidc';
 import './s3-minio';
 import './saml';
 import './voice';
+import './webhooks';
 
 /**
  * `core/topology.ts`'s `DOCKER`. Spelled out rather than imported because presets is the

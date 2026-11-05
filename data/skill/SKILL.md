@@ -38,6 +38,7 @@ command takes it and read the last line (see [The output contract](#the-output-c
 | SAML, OIDC, email, S3, livechat, offline | `--preset saml`, `oidc`, `email`, `s3_minio`, `livechat` or `airgapped` on `up` | `oidc`: ask the person to add `127.0.0.1 keycloak` to `/etc/hosts` |
 | encrypted conversations | `houston up --version 8.8.0 --name <n> --preset e2ee --wait --json` | the person signs in as `e2e-alice` and `e2e-bob` in two browser profiles ([E2EE](#e2ee)) |
 | Voice calls | `houston up --version 8.7.0 --name <n> --preset voice --license <file> --wait --json` | the person signs in as `voice-alice` and `voice-bob` and calls; `--set sip_integration=on` adds the SIP integration ([Voice](#voice)) |
+| an integration or a webhook | `houston up --version 8.6.3 --name <n> --preset webhooks --wait --json` | `houston info --name <n> --json` gives the inbox URL and the incoming hook; the inbox UI is on the machine running houston only; `--set capture=all` repoints a restored dump's outgoing integrations at the inbox |
 | a pull request's build, or develop | `houston up --version pr-42617 --name <n> --wait --json` | a CI build, not a partial version ([Versions](#versions)) |
 | HTTPS on this machine | `houston up --version 8.5.1 --name <n> --https --wait --json` | for OAuth, SAML and anything that needs a secure origin; the person runs `houston trust-ca` once first ([HTTPS](#https)) |
 | HTTPS for a phone or another machine | `houston up --version 8.5.1 --name <n> --domain <host> --email <address> --wait --json` | ask for the name; it must already point at this machine ([HTTPS](#https)) |
@@ -142,8 +143,8 @@ From `houston info --name <n> --json`:
   once the person has agreed, or for a workspace you started for your own checks;
 - stopping or removing a workspace the person asked for, even one you created, for instance
   to free a port. There is none to free for a second workspace with the same `ldap`,
-  `saml`, `oidc`, `email`, `s3_minio` or `livechat` preset: its side service gets the next
-  free port, and `houston info` gives its addresses. Two `voice` workspaces with
+  `saml`, `oidc`, `email`, `s3_minio`, `livechat` or `webhooks` preset: its side service gets
+  the next free port, and `houston info` gives its addresses. Two `voice` workspaces with
   `sip_integration=on` clash on their RTP ports, whose numbers phones dial: give the second
   its own range with `--set rtp_ports=21000-21046` rather than removing the first. Only one
   with `pbx=on` can run per machine;
@@ -204,10 +205,12 @@ guess. New keys may appear in `data` or `warnings`; ignore ones you do not know.
 
 ### Presets
 
-`capabilities.presets` lists what this build has: `airgapped`, `default`, `e2ee`, `email`, `ldap`, `livechat`, `oidc`, `s3_minio`, `saml`, `voice`. A preset starts the side
+`capabilities.presets` lists what this build has: `airgapped`, `default`, `e2ee`, `email`, `ldap`, `livechat`, `oidc`, `s3_minio`, `saml`, `voice`, `webhooks`. A preset starts the side
 service, wires Rocket.Chat to it and turns the feature on, so it is ready when you
 arrive: an `ldap` workspace has users, an `email` one catches every message Rocket.Chat
-sends, `airgapped` has no route to Rocket.Chat Cloud. `houston presets` prints each
+sends, a `webhooks` one catches every outgoing integration call and Omnichannel webhook
+in a web inbox, `airgapped` has no route to Rocket.Chat Cloud.
+`houston presets` prints each
 preset's `--set` parameters; `--set users=130000` on `ldap` is the large-directory case.
 
 - `--preset` takes a **name from that list, never a path**.

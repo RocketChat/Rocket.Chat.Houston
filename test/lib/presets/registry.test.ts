@@ -20,6 +20,7 @@ const RECORDED_BUILDERS = [
   's3_minio',
   'saml',
   'voice',
+  'webhooks',
 ];
 
 describe('the leaf registry', () => {

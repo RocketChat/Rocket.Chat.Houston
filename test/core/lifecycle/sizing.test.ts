@@ -61,6 +61,7 @@ describe('capacity arithmetic', () => {
           livechat: 60,
           'multi-instance': 400,
           email: 40,
+          webhooks: 30,
         },
         floor_cpus: 4,
         floor_gib: 6.0,
