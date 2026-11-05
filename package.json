@@ -1,6 +1,6 @@
 {
   "name": "@rocket.chat/houston",
-  "version": "2.1.7",
+  "version": "2.1.8",
   "description": "Reproduce a customer's Rocket.Chat issue on their exact version, in minutes.",
   "license": "MIT",
   "repository": {
