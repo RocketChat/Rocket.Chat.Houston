@@ -13,7 +13,9 @@ import {
   flattenNotes,
   noteGroup,
   noteGroupsOf,
+  oauthNeedsHttps,
   scenarioGroup,
+  signInGroup,
 } from '../../../src/core/lifecycle/notes';
 
 describe('note groups', () => {
@@ -715,5 +717,175 @@ describe('the webhooks group: what post-ready recorded, on both runtimes', () =>
       ),
     );
     expect(Object.keys(none)).not.toContain('Webhooks');
+  });
+});
+
+describe('signing in on Rocket.Chat 9: said on every read, for both front-ends', () => {
+  const TITLE = 'Signing in on Rocket.Chat 9';
+  // What the create records: the built preset's post-ready actions, which say how it signs in.
+  const signingIn = (
+    preset: string,
+    rcVersion: string,
+    extra: Record<string, unknown> = {},
+    values: Partial<Metadata> = {},
+    params: Record<string, string> = {},
+  ): Metadata =>
+    record({
+      name: 'o9',
+      project: 'houston-o9',
+      preset,
+      rcVersion,
+      ...values,
+      extra: {
+        runtime: 'docker',
+        post_ready: preset.split('+').flatMap((one) => presets.load(one, params).postReady),
+        ...extra,
+      },
+    });
+  const said = (meta: Metadata): string => bodyOf(signInGroup(meta));
+
+  it('reaches `info` and the GUI panel: the licence, the way to add it later, and where HTTPS opens', async () => {
+    // The create said all of this once, in a log that scrolls away, and the GUI's job named
+    // only terminal flags and `houston ready`.
+    const meta = signingIn(
+      'oidc',
+      '9.1.0',
+      { edge: true, tls: 'local' },
+      { publicUrl: 'https://o9.houston.localhost' },
+    );
+    const s = await summary(meta);
+    // `notes` is what `info` prints, `note_groups` what the GUI's panel draws.
+    expect((s.notes as string[]).join('\n')).toContain(`${TITLE}:`);
+    const text = (s.note_groups as NoteGroup[])
+      .filter((one) => one.title === TITLE)
+      .flatMap((one) => one.body)
+      .join(' ');
+    expect(text).toContain('a license carrying oauth-enterprise');
+    expect(text).toContain('Administration → Subscription');
+    expect(text).toContain(
+      '`houston ready --name o9` (in the GUI: take it down, then bring it up)',
+    );
+    expect(text).toContain('served at https://o9.houston.localhost');
+    expect(text).toContain('only in a browser on the machine running houston');
+    expect(text).toContain("in the GUI, HTTPS: Let's Encrypt");
+    // Terminal-only words a browser reader cannot act on, and "this machine", which in the
+    // GUI is the reader's own computer rather than the one running houston.
+    expect(text).not.toMatch(/--license <file>|--reg-token <token>|this machine/u);
+  });
+
+  it('stops asking for a licence once houston gave it one or a registration token', () => {
+    const https = { edge: true, tls: 'local' };
+    const at = { publicUrl: 'https://o9.houston.localhost' };
+    for (const given of [{ licensed: true }, { registered: true }]) {
+      const text = said(signingIn('oidc', '9.1.0', { ...https, ...given }, at));
+      expect(text).not.toContain('Premium plan');
+      expect(text).toContain('only over HTTPS');
+    }
+  });
+
+  it('follows what Rocket.Chat said its license turns on, over what the create was given', async () => {
+    // A license added later in Administration → Subscription: the record still said neither,
+    // so `info`, the panel and its badge kept saying "refused" after sign-in worked.
+    const PREMIUM = ['ldap-enterprise', 'saml-enterprise', 'oauth-enterprise'];
+    const added = signingIn('oidc', '9.0.0', { license_status: 'valid', license_modules: PREMIUM });
+    expect(said(added)).not.toContain('Premium plan');
+    expect((await summary(added)).licensed).toBe(true);
+    // Asked, and none there: said as what Rocket.Chat answered, with how the note goes.
+    const none = said(signingIn('oidc', '9.0.0', { license_modules: [] }));
+    expect(none).toContain('Rocket.Chat had no such license when houston last asked it');
+    expect(none).toContain('this note goes once the license is there');
+    expect(none).not.toContain('record shows neither');
+    // A registration token that brought no license: the line comes back.
+    expect(said(signingIn('oidc', '9.0.0', { registered: true, license_modules: [] }))).toContain(
+      'Premium plan',
+    );
+    // A license without the module this preset needs: still refused, and only that one named.
+    const partial = said(
+      signingIn('ldap', '9.0.0', { license_modules: ['ldap-enterprise'] }, {}, { idp: 'oidc' }),
+    );
+    expect(partial).toContain('refuse Custom OAuth sign-in');
+    expect(partial).not.toContain('ldap-enterprise');
+    expect((await summary(signingIn('oidc', '9.0.0', { license_modules: [] }))).licensed).toBe(
+      false,
+    );
+  });
+
+  it('says a plain-http one returns to the login page, and nothing about a public name', () => {
+    // Let's Encrypt, and a --root-url behind an HTTPS tunnel: both sign in from 9.1.0.
+    const acme = (version: string): Metadata =>
+      signingIn(
+        'oidc',
+        version,
+        { licensed: true, edge: true, tls: 'acme' },
+        { publicUrl: 'https://o9.example.test' },
+      );
+    const tunnel = signingIn('oidc', '9.0.0', {
+      licensed: true,
+      advertised_url: 'https://o9.tunnel.example.test',
+    });
+    expect([signInGroup(acme('9.1.0')), signInGroup(tunnel)]).toEqual([[], []]);
+    // 9.0 joins houston's absolute token path onto the provider URL, and over plain http the
+    // cookie is dropped: ONE line, the same for both, so no advice to rebuild into a 500. A
+    // proxy of the user's own (the tunnel) leaves the path relative, and signs in.
+    const nineZero =
+      "Rocket.Chat 9.0 cannot finish this OAuth sign-in through houston: over plain http the 'Keycloak " +
+      "(OIDC)' sign-in returns to the login page, and over houston's HTTPS (`--https`, " +
+      '`--domain`) the callback answers 500, because 9.0 joins the full token address ' +
+      'houston gives it onto the provider URL (fixed in 9.1.0, RocketChat/Rocket.Chat#43062). ' +
+      'To test this sign-in, use 8.9, or 9.1.0 or later, or a TLS proxy of your own ' +
+      '(`--root-url https://<name>`).';
+    expect(said(acme('9.0.0'))).toBe(nineZero);
+    expect(said(signingIn('oidc', '9.0.0', { licensed: true }))).toBe(nineZero);
+    // Unlicensed, it leads: "add a license" first read as the fix, and on 9.0 it is not one.
+    const unlicensed = signInGroup(signingIn('oidc', '9.0.0'))[0]?.body ?? [];
+    expect([unlicensed[0], unlicensed.length]).toEqual([nineZero, 3]);
+    expect(unlicensed[1]).toContain('refuse Custom OAuth sign-in without a Premium plan');
+    expect(said(signingIn('oidc', '9.0.2', { licensed: true }))).toContain('#43062');
+    expect(said(signingIn('oidc', '10.0.0', { licensed: true }))).not.toContain('#43062');
+  });
+
+  it('names the rebuild that keeps the data, with the HTTPS flag to add', () => {
+    // An oidc workspace upgraded past 9.0 is plain http, and "create it again" read as starting
+    // over; `up --force` keeps the data. HTTPS is asked for, never turned on by itself.
+    for (const plain of [
+      signingIn('oidc', '9.1.0', { licensed: true }),
+      signingIn('oidc', '9.1.0', { licensed: true, advertised_url: 'http://box:3000' }),
+      signingIn('oidc', '9.1.0', { licensed: true, bind_host: '0.0.0.0' }),
+      signingIn('oidc', '9.1.0', { licensed: true, runtime: 'kubernetes' }),
+    ]) {
+      const text = said(plain);
+      expect(text).toContain("plain http: the 'Keycloak (OIDC)' sign-in returns to the login page");
+      expect(text).toContain(
+        'Rebuild it with HTTPS, keeping its data: `houston up --name o9 --version 9.1.0 ' +
+          '--force` with `--https`',
+      );
+      expect(text).toContain('"Rebuild it from these settings, keeping its data"');
+      expect(text).not.toContain('houston serves it over HTTPS');
+    }
+  });
+
+  it('is needed by oidc and by ldap with idp=oidc, from 9.0 on, and by nothing else', () => {
+    // 9.0's Passport session cookie is secure in a production build: over http the callback
+    // returns to the login page. Measured: 9.0.0 signed in over HTTPS only, 8.9.1 over both.
+    expect([
+      oauthNeedsHttps(presets.load('oidc', {}), '9.0.0'),
+      oauthNeedsHttps(presets.load('ldap', { idp: 'oidc' }), '9.1.0'),
+      oauthNeedsHttps(presets.load('oidc', {}), '8.9.1'),
+      oauthNeedsHttps(presets.load('saml', {}), '9.0.0'),
+      oauthNeedsHttps(presets.load('ldap', {}), '9.0.0'),
+      oauthNeedsHttps(presets.load('oidc', {}), 'develop'),
+    ]).toEqual([true, true, false, false, false, false]);
+  });
+
+  it('names what each login preset needs, and nothing before 9.0', () => {
+    expect(said(signingIn('saml', '9.0.0'))).toContain('a license carrying saml-enterprise');
+    expect(said(signingIn('saml', '9.0.0'))).not.toContain('HTTPS');
+    expect(said(signingIn('ldap', '9.0.0', {}, {}, { idp: 'oidc' }))).toContain(
+      'a license carrying ldap-enterprise and oauth-enterprise',
+    );
+    expect(said(signingIn('ldap+email', '9.0.0'))).toContain('through the ldap preset');
+    for (const before of [signingIn('oidc', '8.9.1'), signingIn('email', '9.0.0')]) {
+      expect(signInGroup(before)).toEqual([]);
+    }
   });
 });

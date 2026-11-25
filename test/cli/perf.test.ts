@@ -231,6 +231,14 @@ describe('the CLI performance option boundary', () => {
     expect(() => parseRamp('10:10', '--spike')).toThrow("--spike peak must exceed base ('10:10')");
   });
 
+  it('refuses a --spike base of 0 VUs, which leaves nothing to measure the spike against', () => {
+    expect(() => parseRamp('0:50', '--spike')).toThrow(
+      'bad --spike: the base must be at least 1 VU, e.g. 10:100',
+    );
+    expect(parseRamp('1:50', '--spike')).toEqual([1, 50]);
+    expect(parseRamp('0:50', '--ramp')).toEqual([0, 50]);
+  });
+
   it('forwards every load-control family and returns artifacts with the SLO exit', async () => {
     const run = coreLoadtest.newLoadRun();
     run.summary = { p95: 900, rps: 42, error_rate: 0.03 };

@@ -16,7 +16,7 @@ import { CreateFailedError } from '../lib/errors';
 import { recordAudit } from '../lib/audit';
 import { storedText } from '../lib/format';
 import { dumps } from '../lib/json-text';
-import { sleep as interruptibleSleep } from '../seams/exec';
+import { Interrupted, sleep as interruptibleSleep } from '../seams/exec';
 import { RequestFailed, rcHttp, type HttpResponse, type RequestOptions } from '../seams/rc-http';
 
 /** Fetch a release document for callers that must prefetch before synchronous resolution. */
@@ -905,28 +905,36 @@ export async function getSetting(
     });
     const parsed = body(resp);
     if (resp.status === 200 && parsed.success === true) return parsed.value;
-  } catch {
-    // Unreachable or unparseable: the caller gets null, which is "unavailable".
+  } catch (error) {
+    // Unreachable or unparseable: the caller gets null, which is "unavailable". A Ctrl-C is
+    // neither, and the run it ends unwinds through here.
+    if (error instanceof Interrupted) throw error;
   }
   return null;
 }
 
 /**
- * Whether Rocket.Chat ACCEPTED the license it holds: true, false, or null when it could not
- * be asked (not serving, or a release whose `licenses.info` does not say).
+ * Whether Rocket.Chat ACCEPTED the license it holds, and the modules that license turns on
+ * (`oauth-enterprise`...; null when the release does not list them). Null when it could not be
+ * asked (not serving, or a release whose `licenses.info` does not say).
  */
-export async function licenseValid(
+export async function licenseInfo(
   rootUrl: string,
   auth: Auth,
   { timeoutMs = 15_000 } = {},
-): Promise<boolean | null> {
+): Promise<{ valid: boolean; modules: string[] | null } | null> {
   try {
     const resp = await get(`${trimEnd(rootUrl)}/api/v1/licenses.info`, {
       headers: authHeaders(auth),
       timeoutMs,
     });
-    const valid = map(body(resp).license).hasValidLicense;
-    return resp.status === 200 && typeof valid === 'boolean' ? valid : null;
+    const license = map(body(resp).license);
+    const valid = license.hasValidLicense;
+    if (resp.status !== 200 || typeof valid !== 'boolean') return null;
+    const modules = Array.isArray(license.activeModules)
+      ? license.activeModules.filter((m): m is string => typeof m === 'string')
+      : null;
+    return { valid, modules };
   } catch {
     return null;
   }
@@ -985,7 +993,8 @@ export async function setSetting(
       timeoutMs,
     });
     return resp.status === 200 && body(resp).success === true;
-  } catch {
+  } catch (error) {
+    if (error instanceof Interrupted) throw error;
     return false;
   }
 }
@@ -1112,11 +1121,14 @@ async function methodCall(
 }
 
 /**
- * Create a Custom OAuth provider via Rocket.Chat's `addOAuthService` method.
+ * Create a Custom OAuth provider: null once created, else why not, in Rocket.Chat's words
+ * where it gave some.
  *
  * A custom provider's `Accounts_OAuth_Custom-<name>-*` settings do not exist until it is
  * created, so OVERWRITE_SETTING env cannot configure it -- this creates the provider (and
- * its settings) so they can then be set via the API.
+ * its settings) so they can then be set via the API. Through `settings.addCustomOAuth`,
+ * which every release from 3.8 has; 9.0 removed the `addOAuthService` method it used to go
+ * through, and refuses both without a licence carrying `oauth-enterprise`.
  */
 export async function addOauthService(
   rootUrl: string,
@@ -1124,8 +1136,34 @@ export async function addOauthService(
   password: string,
   name: string,
   { timeoutMs = 15_000 } = {},
-): Promise<boolean> {
-  return await methodCall(rootUrl, auth, password, 'addOAuthService', [name], { timeoutMs });
+): Promise<string | null> {
+  const headers = {
+    ...authHeaders(auth),
+    'Content-Type': 'application/json',
+    ...(await password2faHeaders(password)),
+  };
+  let resp: HttpResponse;
+  try {
+    resp = await post(`${trimEnd(rootUrl)}/api/v1/settings.addCustomOAuth`, {
+      headers,
+      json: { name },
+      timeoutMs,
+    });
+  } catch (error) {
+    return `no answer from Rocket.Chat: ${(error as Error).message}`;
+  }
+  if (resp.status === 404) {
+    // Before 3.8 the method is the only way.
+    const made = await methodCall(rootUrl, auth, password, 'addOAuthService', [name], {
+      timeoutMs,
+    });
+    return made ? null : 'Rocket.Chat refused the addOAuthService method';
+  }
+  const answer = body(resp);
+  if (resp.status === 200 && answer.success === true) return null;
+  return typeof answer.error === 'string' && answer.error !== ''
+    ? answer.error
+    : `HTTP ${resp.status}`;
 }
 
 /** Create a verified user (idempotent-ish: an existing username just fails). */
@@ -1185,7 +1223,11 @@ export async function addLivechatAgent(
   }
 }
 
-/** Give user `id` a voice call extension; false when Rocket.Chat refuses (Voice unlicensed). */
+/**
+ * Give user `id` a voice call extension; false when Rocket.Chat refuses (Voice unlicensed).
+ * 9.0 renamed the field `freeSwitchExtension` to `sipExtension`, and every release from 8.0
+ * refuses a field it does not know, so the old name is sent only after the new one is refused.
+ */
 export async function setVoiceExtension(
   rootUrl: string,
   auth: Auth,
@@ -1199,16 +1241,19 @@ export async function setVoiceExtension(
     'Content-Type': 'application/json',
     ...(await password2faHeaders(password)),
   };
-  try {
-    const resp = await post(`${trimEnd(rootUrl)}/api/v1/users.update`, {
-      headers,
-      json: { userId: id, data: { freeSwitchExtension: extension } },
-      timeoutMs,
-    });
-    return resp.status === 200 && body(resp).success === true;
-  } catch {
-    return false;
+  for (const field of ['sipExtension', 'freeSwitchExtension']) {
+    try {
+      const resp = await post(`${trimEnd(rootUrl)}/api/v1/users.update`, {
+        headers,
+        json: { userId: id, data: { [field]: extension } },
+        timeoutMs,
+      });
+      if (resp.status === 200 && body(resp).success === true) return true;
+    } catch {
+      return false;
+    }
   }
+  return false;
 }
 
 /** Resolve a username to its `_id` via users.info, or null. */

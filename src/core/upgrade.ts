@@ -54,6 +54,7 @@ import {
 import * as audit from './audit';
 import * as backup from './backup';
 import { refuseAmbiguous, resolveName } from './lifecycle/naming';
+import { signInGroup } from './lifecycle/notes';
 import { mayDestroy } from './lifecycle/ownership';
 import { requireEngine } from './lifecycle/preconditions';
 import { LAST_BACKUP_KEY, UPGRADE_FROM_KEY } from './lifecycle/types';
@@ -321,6 +322,14 @@ export async function plan(
       'this workspace terminates TLS; its certificate and Traefik configuration are ' +
         'left exactly as they are',
     );
+  }
+  // What Rocket.Chat 9 will ask of this sign-in (a licence, HTTPS for OAuth), said before the
+  // upgrade reproduces it rather than found at the login page: the notes say it from then on.
+  if (signInGroup(meta).length === 0) {
+    const after = signInGroup({ ...meta, rcVersion: resolved.rcVersion });
+    for (const line of after.flatMap((group) => group.body)) {
+      warnings.push(`after the upgrade to ${resolved.rcVersion}: ${line}`);
+    }
   }
 
   return {

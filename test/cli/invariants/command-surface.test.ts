@@ -76,7 +76,7 @@ describe('the command table against the built parser', () => {
       COMMAND_SPECS.filter((spec) => spec.json.mode !== 'none').map((spec) => spec.path),
     );
     expect([...advertised].sort()).toEqual([...real].sort());
-    expect(advertised.size).toBe(12);
+    expect(advertised.size).toBe(13);
     // `capabilities` answers in an envelope and always has -- it has no `--json` because
     // it has no other mode -- so deriving purely from the flag made the one document
     // whose purpose is saying which commands speak JSON report that this one does not.
@@ -91,7 +91,7 @@ describe('the command table against the built parser', () => {
     const flags = described.reduce((total, command) => total + command.flags.length, 0);
     // The number the frozen `capabilities` baseline carries. A flag that exists in the
     // parser and not in the document is a caller hardcoding a list it was told not to.
-    expect(flags).toBe(182);
+    expect(flags).toBe(183);
     for (const command of described) {
       expect([...command.flags].sort()).toEqual(command.flags);
       expect(new Set(command.flags).size).toBe(command.flags.length);

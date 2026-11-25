@@ -24,7 +24,7 @@ import { APPLY_TIMEOUT, CONTEXT, isOurs } from './kube/names';
 import { namespaceFor } from './kube/namespace';
 import * as rcapi from './rcapi';
 import { composeExec } from './runner/engine';
-import { adminPass, type Metadata, updateMeta } from './runner/record';
+import { adminPass, externalUrl, type Metadata, updateMeta } from './runner/record';
 import * as topology from './topology';
 
 /**
@@ -48,6 +48,8 @@ const realSleep: Sleep = (seconds) => interruptibleSleep(seconds * 1000);
 
 export interface Options {
   readonly sleep?: Sleep;
+  /** The sign-in Rocket.Chat 9 refuses this workspace for lack of a license, if any. */
+  readonly licenseGate?: { readonly kinds: string; readonly modules: string } | null;
 }
 
 /** Truthiness: false for null, undefined, false, 0, '', [] and {}. */
@@ -188,7 +190,7 @@ async function samlProvidersReady(
       async (root) =>
         await rcapi.samlProviderReady(root, {
           auth,
-          publicUrl: meta.publicUrl || meta.rootUrl,
+          publicUrl: externalUrl(meta),
           timeoutMs,
         }),
     ),
@@ -270,7 +272,7 @@ async function registerSamlProvider(
         roots.map(
           async (root) =>
             await rcapi.samlProviderState(root, provider, {
-              publicUrl: meta.publicUrl || meta.rootUrl,
+              publicUrl: externalUrl(meta),
             }),
         ),
       );
@@ -454,8 +456,9 @@ async function prCreateOauthProvider(
   sleep: Sleep,
 ): Promise<boolean> {
   const name = String(required(action, 'name'));
-  if (!(await rcapi.addOauthService(meta.rootUrl, auth, adminPass(meta), name))) {
-    warn(emit, 'could not create the OAuth provider', { phase: 'post_ready' });
+  const refused = await rcapi.addOauthService(meta.rootUrl, auth, adminPass(meta), name);
+  if (refused !== null) {
+    warn(emit, `could not create the OAuth provider: ${refused}`, { phase: 'post_ready' });
     return false;
   }
   const settings = { ...(required(action, 'settings') as Record<string, unknown>) };
@@ -1106,7 +1109,7 @@ export async function runPostReady(
   meta: Metadata,
   auth: rcapi.Auth | null | undefined,
   emit: Emit,
-  { sleep = realSleep }: Options = {},
+  { sleep = realSleep, licenseGate = null }: Options = {},
 ): Promise<string[] | null> {
   const extra = bagOf(meta.extra);
   const raw = extra.post_ready;
@@ -1116,7 +1119,8 @@ export async function runPostReady(
       warn(
         emit,
         'preset self-config skipped - could not log in as admin; ' +
-          `re-run once reachable: houston ready --name ${meta.name}`,
+          `re-run once reachable: houston ready --name ${meta.name} ` +
+          '(in the GUI: take it down, then bring it up)',
         { phase: 'post_ready' },
       );
     }
@@ -1141,10 +1145,15 @@ export async function runPostReady(
         `partly configured — these did not complete: ${failed.join(', ')}`,
       { phase: 'post_ready' },
     );
+    // Re-running is no use while Rocket.Chat 9 refuses the sign-in it sets up: say what is.
     warn(
       emit,
-      `    Rocket.Chat itself is fine. Re-run the preset's ` +
-        `self-configuration with: houston ready --name ${meta.name}`,
+      (licenseGate === null
+        ? `    Rocket.Chat itself is fine. Re-run the preset's self-configuration with: `
+        : `    Rocket.Chat 9 refuses ${licenseGate.kinds} sign-in without a license carrying ` +
+          `${licenseGate.modules}, so this cannot finish until one is added. Add it, then ` +
+          `re-run the preset's self-configuration with: `) +
+        `houston ready --name ${meta.name} (in the GUI: take it down, then bring it up)`,
       { phase: 'post_ready' },
     );
   }

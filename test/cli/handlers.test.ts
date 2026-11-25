@@ -49,6 +49,31 @@ describe('real handler dispatch through Commander', () => {
     });
   });
 
+  test('presets --json answers the catalogue in the names the support bot reads', async () => {
+    // The support bot runs `houston presets --json` and reads `data.presets[].paramsHelp` (and
+    // `.error`) to check a job's preset options; 2.1.8 refused the flag with exit 2, so every
+    // job that set a preset option was refused before it booted anything.
+    fs.mkdirSync(path.join(process.env.HOUSTON_HOME as string, 'presets'), { recursive: true });
+    fs.writeFileSync(
+      path.join(process.env.HOUSTON_HOME as string, 'presets', 'broken.yaml'),
+      'name: broken\n  : [\n',
+    );
+    const result = await real(['presets', '--json']);
+    expect(result.code).toBe(0);
+    const transcript = parseJsonTranscript(result.stdout, false);
+    expect(transcript.envelope).toMatchObject({ ok: true, schema: 'houston.presets.v1' });
+    const presets = (transcript.envelope as { data: { presets: Record<string, unknown>[] } }).data
+      .presets;
+    const ldap = presets.find((p) => p.name === 'ldap') as Record<string, unknown>;
+    expect(Object.keys(ldap).sort()).toEqual(['description', 'name', 'paramsHelp']);
+    expect(ldap.paramsHelp).toMatchObject({ users: expect.any(String) });
+    const broken = presets.find((p) => p.name === 'broken') as Record<string, unknown>;
+    expect(broken.error).toEqual(expect.any(String));
+    // Plain `presets` is unchanged: the boxes, no JSON.
+    const text = await real(['presets']);
+    expect(text.stdout.startsWith('Presets\n')).toBe(true);
+  });
+
   test('positional config and users actions execute rather than becoming subcommands', async () => {
     expect((await real(['config', 'set', 'acme.staging', 'false'])).code).toBe(0);
     // `false`: a stored false, which is not an unset key.

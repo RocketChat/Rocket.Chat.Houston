@@ -566,6 +566,45 @@ describe('recovery through the side-effect owners', () => {
     expect(restored[0]?.[0]).toMatchObject({ prior_nano: 2_000_000_000, set_mem: false });
   });
 
+  it.each([
+    ['0000000000000001', 'ffffffffffffffff'],
+    ['ffffffffffffffff', '0000000000000001'],
+  ])(
+    'undoes two runs cut short newest first, so what was there before both stays (first run %s)',
+    async (firstId, secondId) => {
+      // The second run noted the first run's caps as its prior. Put back oldest first, the
+      // first run's caps were the last word. The ids are random, and the file names were
+      // the order, so it went either way.
+      const { mod, recovery, restored } = owners();
+      const plant = (id: string, at: string, priorNano: number): void => {
+        const planted = plantAbandoned(mod, mod.CONSTRAINTS_APPLIED, 'w', {
+          applied: [
+            {
+              container: 'abc',
+              service: 'rocketchat',
+              prior_nano: priorNano,
+              prior_mem: 1073741824,
+              prior_swap: -1,
+              set_cpus: true,
+              set_mem: false,
+            },
+          ],
+        });
+        const file = path.join(mod.journalDir(), `${planted}.json`);
+        const data = JSON.parse(fs.readFileSync(file, 'utf8')) as Entry;
+        fs.rmSync(file);
+        const renamed = path.join(mod.journalDir(), `${id}.json`);
+        fs.writeFileSync(renamed, JSON.stringify({ ...data, id, at }));
+      };
+      plant(firstId, '2026-11-24T10:00:00Z', 0);
+      plant(secondId, '2026-11-24T10:05:00Z', 2_000_000_000);
+      expect(mod.openEntries().map((entry) => entry.id)).toEqual([firstId, secondId]);
+      const rows = await recovery.recover();
+      expect(rows.map((row) => row.repaired)).toEqual([true, true]);
+      expect(restored.map((applied) => applied[0]?.prior_nano)).toEqual([2_000_000_000, 0]);
+    },
+  );
+
   it('starts Rocket.Chat again, and keeps a rate-limiter note whose repair failed', async () => {
     // A workspace left stopped is "a worse outcome than the failure itself"; the limiter
     // left off is a security-relevant setting nobody chose.

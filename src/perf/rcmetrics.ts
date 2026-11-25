@@ -8,6 +8,7 @@
  * with RC by definition) -- no extra images, no Grafana.
  */
 import { composeExecCapture } from '../core/runner/engine';
+import { Interrupted, interruptRaised } from '../seams/exec';
 
 /**
  * Unlabeled gauges worth tracking, verified against a live RC `/metrics` dump and the
@@ -133,7 +134,18 @@ export class RCMetricsSampler {
   }
 
   private async run(): Promise<void> {
-    while (!this.stopping) {
+    try {
+      await this.sample();
+    } catch (error) {
+      // A Ctrl-C took the sample in flight: the run is unwinding, and `stop()` reports what
+      // was sampled before it.
+      if (!(error instanceof Interrupted)) throw error;
+    }
+  }
+
+  private async sample(): Promise<void> {
+    // Not after a Ctrl-C: a sample started then ends the process before the run's restore.
+    while (!this.stopping && !interruptRaised()) {
       for (const svc of this.services) {
         // The seam takes MILLISECONDS; `SAMPLE_TIMEOUT_S` is seconds.
         const [rc, text] = await composeExecCapture(

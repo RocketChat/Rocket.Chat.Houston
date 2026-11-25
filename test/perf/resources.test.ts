@@ -1,4 +1,5 @@
 import type * as ModNS from '../../src/perf/resources';
+import type * as ExecNS from '../../src/seams/exec';
 
 import { ResourceMonitor, parseCpu, parseMem, toBytes } from '../../src/perf/resources';
 
@@ -269,6 +270,74 @@ describe('the sampler lifecycle', () => {
       expect(Object.keys(mon.report())).toEqual(['rocketchat']);
     } finally {
       jest.useRealTimers();
+    }
+  });
+});
+
+describe('the sampler and a Ctrl-C', () => {
+  /** As the RC metrics sampler: see test/perf/rcmetrics.test.ts. */
+  it('ends its loop when the Ctrl-C takes the sample in flight, and stop() reports what it had', async () => {
+    jest.resetModules();
+    const exec = require('../../src/seams/exec') as typeof ExecNS;
+    let polls = 0;
+    jest.doMock('../../src/core/runner/engine', () => ({
+      containerIds: () => Promise.resolve(['abc123']),
+    }));
+    jest.doMock('../../src/core/runner/queries', () => ({
+      dockerStats: async () => {
+        polls += 1;
+        if (polls > 1) await exec.sleep(60_000);
+        return 'rocketchat\t10%\t100MiB / 2GiB';
+      },
+    }));
+    const { ResourceMonitor: Monitor } = require('../../src/perf/resources') as typeof ModNS;
+    let ended = 0;
+    try {
+      const report = await exec.unwindsOnInterrupt(async () => {
+        const mon = new Monitor('ws', 0.01).start();
+        await new Promise((r) => setTimeout(r, 50));
+        exec.interrupt(() => (ended += 1));
+        return await exec.cleanup(async () => await mon.stop());
+      });
+      expect(report.rocketchat?.peak_mem).toBe(100 * 1024 ** 2);
+      expect(polls).toBe(2);
+      expect(ended).toBe(0);
+    } finally {
+      exec.resetInterruptForTest();
+    }
+  });
+
+  it('starts no sample after a Ctrl-C, which would end the process before the restore', async () => {
+    jest.resetModules();
+    const exec = require('../../src/seams/exec') as typeof ExecNS;
+    let polls = 0;
+    jest.doMock('../../src/core/runner/engine', () => ({
+      containerIds: () => Promise.resolve(['abc123']),
+    }));
+    jest.doMock('../../src/core/runner/queries', () => ({
+      dockerStats: async () => {
+        await exec.interruptPoint();
+        polls += 1;
+        return 'rocketchat\t10%\t100MiB / 2GiB';
+      },
+    }));
+    const { ResourceMonitor: Monitor } = require('../../src/perf/resources') as typeof ModNS;
+    let ended = 0;
+    try {
+      const outcome = await exec.unwindsOnInterrupt(async () => {
+        const mon = new Monitor('ws', 0.05).start();
+        const k6 = exec.sleep(60_000);
+        await new Promise((r) => setTimeout(r, 10));
+        exec.interrupt(() => (ended += 1));
+        await k6.catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 120));
+        if (ended > 0) return 'ended';
+        return await exec.cleanup(async () => await mon.stop());
+      });
+      expect(outcome).toEqual({ rocketchat: expect.anything() });
+      expect(polls).toBe(1);
+    } finally {
+      exec.resetInterruptForTest();
     }
   });
 });

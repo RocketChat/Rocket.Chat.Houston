@@ -382,7 +382,7 @@ describe('applying the plan', () => {
       },
       addOauthService: (_u: string, _a: unknown, _p: string, name: string) => {
         calls.push(['+oauth', name]);
-        return Promise.resolve(true);
+        return Promise.resolve(null);
       },
     }));
     jest.doMock('../../src/core/journal', () => ({

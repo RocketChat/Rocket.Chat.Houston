@@ -39,13 +39,14 @@ import {
   type Auth,
   completeSetupWizard,
   getSetting,
-  licenseValid,
+  licenseInfo,
+  setSetting,
   NotReady,
   apiInfo,
   waitReady,
 } from '../rcapi';
 import * as engine from '../runner/engine';
-import { type Metadata, adminPass, readMeta, updateMeta } from '../runner/record';
+import { type Metadata, adminPass, externalUrl, readMeta, updateMeta } from '../runner/record';
 import {
   oneShotSetups,
   projectStates,
@@ -58,6 +59,7 @@ import * as topology from '../topology';
 import { MODE_LOCAL, originCertificate } from '../tls';
 
 import { login } from './admin';
+import { loginPresetOf, premiumSignIn, signInGate } from './notes';
 import * as inspect from './inspect';
 import * as seeding from './seeding';
 import { CREATE_UNFINISHED, clearKind, pendingSeed } from '../journal';
@@ -706,6 +708,11 @@ export async function waitServingKubernetes(
  * Site_Url is anything else is installed and refused ("Url validation failed"), and the
  * panel said "Licensed" all the same. Asked a few times, because Rocket.Chat may still be
  * applying it when it first serves; no answer records nothing rather than a guess.
+ *
+ * Also asked, once, where Rocket.Chat 9 refuses this workspace's sign-in without a license
+ * houston did not give: one added later in Administration → Subscription lifts it, and the
+ * notes said "refused" for as long as the workspace lived. The modules it turns on are
+ * recorded too, which is what the notes read.
  */
 export async function checkLicense(
   meta: Metadata,
@@ -713,14 +720,27 @@ export async function checkLicense(
   emit: Emit,
   pause: (ms: number) => Promise<void> = sleep,
 ): Promise<void> {
-  if (auth === null || bag(meta.extra).licensed !== true) return;
-  let valid: boolean | null = null;
-  for (let tries = 0; tries < 4 && valid !== true; tries += 1) {
+  if (auth === null) return;
+  const given = bag(meta.extra).licensed === true;
+  const pre = loginPresetOf(meta);
+  if (!given && premiumSignIn(pre, meta.rcVersion) === null) return;
+  let answer: Awaited<ReturnType<typeof licenseInfo>> = null;
+  for (let tries = 0; tries < (given ? 4 : 1) && answer?.valid !== true; tries += 1) {
     if (tries > 0) await pause(5000);
-    valid = await licenseValid(meta.rootUrl, auth);
+    answer = await licenseInfo(meta.rootUrl, auth);
   }
-  if (valid === null) return;
-  if (valid) {
+  if (answer === null) return;
+  const { valid, modules } = answer;
+  if (!given) {
+    const lifted = premiumSignIn(pre, meta.rcVersion);
+    if (valid && lifted !== null && premiumSignIn(pre, meta.rcVersion, modules ?? []) === null)
+      info(
+        emit,
+        `Rocket.Chat has a license carrying ${lifted.modules}: sign-in through the ` +
+          `${lifted.through} preset is no longer refused`,
+        { phase: 'post_ready' },
+      );
+  } else if (valid) {
     info(emit, 'Rocket.Chat accepted the license', { phase: 'post_ready' });
   } else {
     const site = await getSetting(meta.rootUrl, auth, adminPass(meta), 'Site_Url');
@@ -734,12 +754,59 @@ export async function checkLicense(
       { phase: 'post_ready' },
     );
   }
-  const status = valid ? 'valid' : 'refused';
-  if (bag(meta.extra).license_status === status) return;
+  // One houston did not give and Rocket.Chat does not hold is no status at all: never "refused".
+  const status = valid ? 'valid' : given ? 'refused' : undefined;
+  const extra = bag(meta.extra);
+  if (
+    extra.license_status === status &&
+    JSON.stringify(extra.license_modules) === JSON.stringify(modules ?? undefined)
+  )
+    return;
+  const put = (into: Record<string, unknown>): void => {
+    if (status === undefined) delete into.license_status;
+    else into.license_status = status;
+    if (modules === null) delete into.license_modules;
+    else into.license_modules = modules;
+  };
   await updateMeta(meta.name, (current) => {
-    current.extra.license_status = status;
+    put(current.extra);
   });
-  meta.extra.license_status = status;
+  put(meta.extra);
+}
+
+/**
+ * Site_Url onto the address a rebuild moved this workspace to, once. Rocket.Chat keeps the stored
+ * setting whatever ROOT_URL says and gives it to the browser as the address to connect to: an
+ * http oidc workspace upgraded to 9.0.0 and rebuilt onto https sat on its loading spinner. Moved
+ * only while it still names the old address, so one set by hand stays; `restore` does the same
+ * for a bundle's (`backup.retargetSiteUrl`). Unanswered, the marker stays for the next `ready`.
+ */
+async function followTheMove(meta: Metadata, auth: Auth | null, emit: Emit): Promise<void> {
+  const from = toText(bag(meta.extra).site_url_moved_from);
+  if (from === '' || auth === null) return;
+  const want = externalUrl(meta);
+  const site = await getSetting(meta.rootUrl, auth, adminPass(meta), 'Site_Url');
+  if (site === null) return;
+  const trim = (url: string): string => url.replace(/\/+$/u, '');
+  if (typeof site === 'string' && trim(site) === trim(from) && trim(from) !== trim(want)) {
+    if (!(await setSetting(meta.rootUrl, auth, adminPass(meta), 'Site_Url', want))) {
+      warn(
+        emit,
+        `Site_Url still reads ${from}, the address before this rebuild, and the browser follows ` +
+          `it: set it to ${want} (Administration, Settings, General, Site URL), or run ` +
+          `\`houston ready --name ${meta.name}\` again.`,
+        { phase: 'post_ready' },
+      );
+      return;
+    }
+    info(emit, `Site_Url moved from ${from} to ${want}, where this workspace is now served`, {
+      phase: 'post_ready',
+    });
+  }
+  await updateMeta(meta.name, (current) => {
+    delete current.extra.site_url_moved_from;
+  });
+  delete meta.extra.site_url_moved_from;
 }
 
 /**
@@ -760,8 +827,11 @@ export async function waitAndFinalize(
   const served = await waitServing(meta, emit, timeout);
   const elapsed = Math.floor((Date.now() - started) / 1000);
   const auth = await finalize(meta, emit);
-  await postready.runPostReady(meta, auth, emit);
+  // Before the preset's setup, which builds its callbacks and checks from Site_Url.
+  await followTheMove(meta, auth, emit);
+  // Before it too: the license Rocket.Chat holds now, not at the last `ready`, decides the advice.
   await checkLicense(meta, auth, emit);
+  await postready.runPostReady(meta, auth, emit, { licenseGate: signInGate(meta) });
   // AND THE SEED THE INTERRUPTED CREATE ASKED FOR. The note says the workspace "may be
   // running without its preset configuration or seed data" and names this command as the
   // thing that completes it -- and this used to run post_ready, seed nothing, print

@@ -176,7 +176,7 @@ From `houston info --name <n> --json`:
    which are advertised.
 3. **Never import houston's internals and never scrape human output.**
    Use `--json` on the commands that have it — `capabilities.commands[].json` says
-   which, and it is a minority, not all of them: `capabilities`, `cluster`, `doctor`, `down`, `info`, `list`, `ready`, `skill install`, `skill status`, `up` (`capabilities` prints
+   which, and it is a minority, not all of them: `capabilities`, `cluster`, `doctor`, `down`, `info`, `list`, `presets`, `ready`, `skill install`, `skill status`, `up` (`capabilities` prints
    JSON without the flag). For the rest (`seed`, `logs`,
    `env`, `backup`, `restore`, `upgrade`, `prune`, `tls-status`, …) the **exit code** is
    the machine-readable part. stdout is the document; anything on stderr is for a
@@ -187,7 +187,7 @@ From `houston info --name <n> --json`:
 Every `--json` reply is one envelope:
 
 ```json
-{"schema":"houston.info.v1","contract":2,"houston_version":"2.1.8",
+{"schema":"houston.info.v1","contract":2,"houston_version":"2.1.9",
  "generated_at":"...","ok":true,"data":{...},"warnings":[],"error":null}
 ```
 

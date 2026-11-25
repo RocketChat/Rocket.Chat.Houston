@@ -19,6 +19,8 @@ import { toText } from '../../lib/format';
 import * as presets from '../../lib/presets/index';
 import { publicPathsOf, withPublicUrl } from '../../lib/presets/public';
 import { type Preset } from '../../lib/presets/types';
+import { isValidVersion } from '../../lib/versions';
+import { parseVersion } from '../../lib/version-spec';
 import { ACME_ISSUER, CA_ISSUER, tlsSecretFor } from '../kube/certmanager';
 import { forwardAlive } from '../kube/forward';
 import { CONTEXT as KUBE_CONTEXT, RELEASE, isOurs } from '../kube/names';
@@ -34,7 +36,7 @@ import {
   prometheusPortOf,
   sidePortsOf,
 } from '../runner/record';
-import { MODE_ACME } from '../tls';
+import { MODE_ACME, MODE_LOCAL } from '../tls';
 import * as topology from '../topology';
 import { presetPorts } from '../../lib/presets/common';
 
@@ -774,13 +776,160 @@ export function webhooksGroup(meta: Metadata): NoteGroup[] {
   return [noteGroup('Webhooks', { rows, body, commands })];
 }
 
+/** A release 9.0 or later; a build tag (develop, pr-N) is not knowable here, so no. */
+function from900(rcVersion: string): boolean {
+  return isValidVersion(rcVersion) && (parseVersion(rcVersion).release[0] ?? 0) >= 9;
+}
+
+/** Whether the preset signs in through a Custom OAuth provider: oidc, and ldap's idp=oidc. */
+const signsInByOauth = (pre: Pick<Preset, 'postReady'>): boolean =>
+  pre.postReady.some((action) => action.action === 'create_oauth_provider');
+
+/**
+ * The sign-ins a login preset gets refused on Rocket.Chat 9 without a licence, or null. 9.0.0
+ * registers `LDAP_Enable`, SAML's enable setting and every Custom OAuth one with a licence
+ * module (PRs #41643, #42477), and `settings.addCustomOAuth` refuses without
+ * `oauth-enterprise`. Read off what the preset sets up, not its name: ldap's idp=saml and
+ * idp=oidc sign in through SAML and Custom OAuth too. The create's warning and the workspace's
+ * notes both say it from here. `has` is the modules Rocket.Chat said its license turns on.
+ */
+export function premiumSignIn(
+  pre: Pick<Preset, 'name' | 'postReady'>,
+  rcVersion: string,
+  has: readonly string[] = [],
+): { kinds: string; modules: string; through: string } | null {
+  if (!from900(rcVersion)) return null;
+  // EACH MEMBER of a composed name. Compose passed the preset it built, `email+ldap` or
+  // `ldap+multi-instance`, which matched nothing -- so Docker never warned for a combination
+  // while Kubernetes, passing the members, did.
+  const names = namesOf(pre.name);
+  const all: [string, string][] = [];
+  if (names.includes('ldap')) all.push(['LDAP', 'ldap-enterprise']);
+  if (pre.postReady.some((action) => action.action === 'saml_idp_cert'))
+    all.push(['SAML', 'saml-enterprise']);
+  if (signsInByOauth(pre)) all.push(['Custom OAuth', 'oauth-enterprise']);
+  const gated = all.filter(([, mod]) => !has.includes(mod));
+  if (gated.length === 0) return null;
+  return {
+    kinds: gated.map(([kind]) => kind).join(' and '),
+    modules: gated.map(([, mod]) => mod).join(' and '),
+    through: names.filter((name) => ['ldap', 'saml', 'oidc'].includes(name)).join(' and '),
+  };
+}
+
+/**
+ * Whether Rocket.Chat needs HTTPS for this workspace's sign-in. 9.0 moved Custom OAuth to
+ * Passport, whose session cookie is `secure` in a production build
+ * (`server/configuration/configurePassport.ts`): over plain http it is never set, and the
+ * callback returns to the login page with no error logged. Measured on 9.0.0 with a licence:
+ * the same workspace signed in over HTTPS and not over http; 8.9.1 signed in over both.
+ */
+export function oauthNeedsHttps(pre: Pick<Preset, 'postReady'>, rcVersion: string): boolean {
+  return from900(rcVersion) && signsInByOauth(pre);
+}
+
+/** A workspace's preset as `premiumSignIn` reads it: its name and the post-ready it was built with. */
+export function loginPresetOf(meta: Metadata): Pick<Preset, 'name' | 'postReady'> {
+  const recorded = bag(meta.extra).post_ready;
+  return {
+    name: meta.preset,
+    postReady: Array.isArray(recorded) ? (recorded as Preset['postReady']) : [],
+  };
+}
+
+/**
+ * The sign-in Rocket.Chat 9 refuses this workspace for lack of a license, as the record knows
+ * it; `asked` is whether that comes from Rocket.Chat's own answer rather than the create's flags.
+ */
+export function signInGate(
+  meta: Metadata,
+): (NonNullable<ReturnType<typeof premiumSignIn>> & { asked: boolean }) | null {
+  const extra = bag(meta.extra);
+  const pre = loginPresetOf(meta);
+  // What Rocket.Chat said its license turns on, when `ready` last asked, beats what the create
+  // was given: a license added later in Administration lifts the gate, and a registration token
+  // that brought no license does not.
+  const asked = Array.isArray(extra.license_modules)
+    ? extra.license_modules.filter((m): m is string => typeof m === 'string')
+    : null;
+  const gate =
+    asked !== null
+      ? premiumSignIn(pre, meta.rcVersion, asked)
+      : extra.licensed === true || extra.registered === true
+        ? null
+        : premiumSignIn(pre, meta.rcVersion);
+  return gate === null ? null : { ...gate, asked: asked !== null };
+}
+
+/**
+ * What Rocket.Chat 9 asks of this workspace's sign-in: a licence, and HTTPS for Custom OAuth.
+ * The create warns once in a log that scrolls away; this says it again on every `info` and in
+ * the GUI's panel, from the record. Worded for both front-ends, as the voice preset's notes are.
+ */
+export function signInGroup(meta: Metadata): NoteGroup[] {
+  const pre = loginPresetOf(meta);
+  const body: string[] = [];
+  const gate = signInGate(meta);
+  if (gate !== null) {
+    body.push(
+      `Rocket.Chat 9.0 and later refuse ${gate.kinds} sign-in without a Premium plan (a ` +
+        `license carrying ${gate.modules}), and ` +
+        (gate.asked
+          ? 'Rocket.Chat had no such license when houston last asked it'
+          : "this workspace's record shows neither a license nor a registration token") +
+        `: sign-in through the ${gate.through} preset is refused.`,
+      'To test it with one, add the license in Rocket.Chat under Administration → Subscription ' +
+        "(it applies at once, without a restart), then run the preset's setup again: " +
+        `\`houston ready --name ${meta.name}\` (in the GUI: take it down, then bring it up). ` +
+        'That also asks Rocket.Chat again, and this note goes once the license is there.',
+    );
+  }
+  if (oauthNeedsHttps(pre, meta.rcVersion)) {
+    const https = externalUrl(meta).startsWith('https:');
+    const [major, minor] = parseVersion(meta.rcVersion).release;
+    if (major === 9 && minor === 0 && !(https && !meta.publicUrl)) {
+      // houston's HTTPS hands Rocket.Chat an absolute token path, which 9.0.x joins onto the
+      // provider URL (`customOAuth.ts` at 9.0.0); a proxy of the user's own leaves it relative.
+      body.push(
+        "Rocket.Chat 9.0 cannot finish this OAuth sign-in through houston: over plain http the 'Keycloak " +
+          "(OIDC)' sign-in returns to the login page, and over houston's HTTPS (`--https`, " +
+          '`--domain`) the callback answers 500, because 9.0 joins the full token address ' +
+          'houston gives it onto the provider URL (fixed in 9.1.0, RocketChat/Rocket.Chat#43062). ' +
+          'To test this sign-in, use 8.9, or 9.1.0 or later, or a TLS proxy of your own ' +
+          '(`--root-url https://<name>`).',
+      );
+      // First: a license alone does not make it work here, so the license advice comes after.
+      body.unshift(body.pop() as string);
+    } else if (!https) {
+      const rebuild = `\`houston up --name ${meta.name} --version ${meta.rcVersion} --force\``;
+      body.push(
+        'Rocket.Chat 9.0 and later sign in through OAuth only over HTTPS, and this workspace is ' +
+          "plain http: the 'Keycloak (OIDC)' sign-in returns to the login page. Rebuild it with " +
+          `HTTPS, keeping its data: ${rebuild} with \`--https\` (a browser on the machine ` +
+          'running houston) or `--domain <name>` (in the GUI: create it again under this name, ' +
+          'with an HTTPS choice and "Rebuild it from these settings, keeping its data").',
+      );
+    } else if (meta.publicUrl && toText(bag(meta.extra).tls) === MODE_LOCAL) {
+      body.push(
+        'Rocket.Chat 9.0 and later sign in through OAuth only over HTTPS. This workspace is ' +
+          `served at ${meta.publicUrl} on houston's local certificate, which opens only in a ` +
+          'browser on the machine running houston, once `houston trust-ca` has run there. To ' +
+          'sign in from another computer, create it with a public name instead (`--domain`; in ' +
+          "the GUI, HTTPS: Let's Encrypt).",
+      );
+    }
+  }
+  return body.length > 0 ? [noteGroup('Signing in on Rocket.Chat 9', { body })] : [];
+}
+
 /** Every group this workspace has, scenario first. The one entry point. */
 export async function noteGroupsOf(meta: Metadata): Promise<NoteGroup[]> {
   const scenario = scenarioGroup(meta);
+  const signIn = signInGroup(meta);
   if (topology.ofMeta(meta) === topology.KUBERNETES) {
     // Not corrected here: a Kubernetes workspace is reached through a port-forward the
     // reader runs themselves, so `localhost` is genuinely their localhost.
-    return [...scenario, ...(await kubernetesNoteGroups(meta))];
+    return [...scenario, ...signIn, ...(await kubernetesNoteGroups(meta))];
   }
-  return [...scenario, ...composeNoteGroups(meta), ...localUrlNote(meta, scenario)];
+  return [...scenario, ...signIn, ...composeNoteGroups(meta), ...localUrlNote(meta, scenario)];
 }

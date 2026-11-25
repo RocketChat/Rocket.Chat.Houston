@@ -3,6 +3,7 @@ import type * as PathsNS from '../../src/core/runner/paths';
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 
 import * as config from '../../src/lib/config';
 
@@ -310,5 +311,98 @@ describe('the shipped scenario scripts', () => {
     expect(read('mixed.js')).toContain('step_');
     expect(read('common.js')).toContain('steps');
     expect(read('common.js')).toContain('SPIKE');
+  });
+});
+
+interface Call {
+  method: string;
+  url: string;
+  token: string | undefined;
+}
+
+/**
+ * A shipped scenario script run in a sandbox, as k6 would run it: `common.js` inlined in
+ * front of it, k6's own modules stubbed, and `http` answering every login with token
+ * `fresh`. Returns the sandbox and the requests the script made.
+ */
+function k6Script(file: string, env: Record<string, string>) {
+  const strip = (src: string) =>
+    src
+      .replace(/^import .*;$/gmu, '')
+      .replace(/^export \{.*\};$/gmu, '')
+      .replace(/^export default /mu, 'var main = ')
+      .replace(/^export /gmu, '');
+  const read = (name: string) => strip(fs.readFileSync(config.dataPath('loadtest', name), 'utf8'));
+  const calls: Call[] = [];
+  const answer = (status: number, body: Record<string, unknown>) => ({
+    status,
+    timings: { duration: 1 },
+    json: (key?: string) => (key === undefined ? body : body[key]),
+  });
+  const send = (method: string, url: string, params?: { headers?: Record<string, string> }) => {
+    calls.push({ method, url, token: params?.headers?.['X-Auth-Token'] });
+    return url.endsWith('/api/v1/login')
+      ? answer(200, { status: 'success', data: { authToken: 'fresh', userId: 'u1' } })
+      : answer(200, { success: true });
+  };
+  class Metric {
+    add(): void {}
+  }
+  const sandbox = vm.createContext({
+    __ENV: { RC_URL: 'http://rc', RC_TOKEN: 'pre-run', RC_UID: 'admin-id', ...env },
+    __VU: 1,
+    __ITER: 0,
+    open: () =>
+      JSON.stringify([{ username: 'alice', password: 'alice', token: 'alice-pre-run', uid: 'a1' }]),
+    Counter: Metric,
+    Trend: Metric,
+    check: () => true,
+    http: {
+      get: (url: string, params?: { headers?: Record<string, string> }) => send('GET', url, params),
+      post: (url: string, _body: unknown, params?: { headers?: Record<string, string> }) =>
+        send('POST', url, params),
+    },
+  });
+  vm.runInContext(`${read('common.js')}\n${read(file)}`, sandbox);
+  return { calls, sandbox };
+}
+
+describe('what the scenario scripts ask k6 for', () => {
+  it.each([
+    { shape: { SPIKE: '10:100' }, start: 10 },
+    { shape: { RAMP: '5:50' }, start: 5 },
+  ])('starts $shape at its first number of VUs, in the option k6 reads', ({ shape, start }) => {
+    // k6 has no top-level `startVUs`: it warned "unknown field" and began at 1 VU, so the
+    // opening "10 VUs" third of a 10:100 spike climbed from 1. With `stages`, k6 reads the
+    // starting count from `vus`.
+    const { sandbox } = k6Script('read.js', { ...shape, DURATION: '60s' });
+    const options = JSON.parse(vm.runInContext('JSON.stringify(options)', sandbox) as string);
+    expect(Object.keys(options).sort()).toEqual(['stages', 'summaryTrendStats', 'vus']);
+    expect(options.vus).toBe(start);
+  });
+
+  it.each([
+    { users: { RC_USERS_FILE: '/k6/users.json' }, kept: 'alice-pre-run' },
+    { users: {}, kept: 'pre-run' },
+  ])('mixed logs its new session straight out, so $kept is never pruned', ({ users, kept }) => {
+    // Rocket.Chat keeps 50 login tokens per user and drops every older one, the token made
+    // before the run among them. mixed logged the same user in over and over, so its reads
+    // and posts failed with 4xx from a few seconds in. Logging out with the new token keeps
+    // the count where it was.
+    const { calls, sandbox } = k6Script('mixed.js', { ...users, DURATION: '30s' });
+    vm.runInContext('Math.random = () => 0.95; main();', sandbox);
+    expect(calls).toEqual([
+      { method: 'POST', url: 'http://rc/api/v1/login', token: undefined },
+      { method: 'POST', url: 'http://rc/api/v1/logout', token: 'fresh' },
+    ]);
+    calls.length = 0;
+    vm.runInContext('Math.random = () => 0.1; main();', sandbox);
+    expect(calls).toEqual([
+      {
+        method: 'GET',
+        url: 'http://rc/api/v1/channels.history?roomName=general&count=20',
+        token: kept,
+      },
+    ]);
   });
 });

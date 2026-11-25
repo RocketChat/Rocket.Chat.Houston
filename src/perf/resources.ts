@@ -16,6 +16,7 @@
  */
 import { containerIds } from '../core/runner/engine';
 import { dockerStats } from '../core/runner/queries';
+import { Interrupted, interruptRaised } from '../seams/exec';
 
 const MEM_UNITS: Readonly<Record<string, number>> = Object.freeze({
   b: 1,
@@ -94,6 +95,15 @@ export class ResourceMonitor {
   }
 
   private async loop(): Promise<void> {
+    try {
+      await this.sample();
+    } catch (error) {
+      // As `RCMetricsSampler.run`: a Ctrl-C took the sample in flight, and the run unwinds.
+      if (!(error instanceof Interrupted)) throw error;
+    }
+  }
+
+  private async sample(): Promise<void> {
     // ON A LATER TURN, so the first read runs after `start()` has returned rather than in
     // `start()` itself. Called straight through, the first `docker compose ps -q` was
     // spawned before `start()` returned -- ahead of the k6 run it is there to watch, on
@@ -104,7 +114,8 @@ export class ResourceMonitor {
       setImmediate(resolve);
     });
     let ids = await containerIds(this.reproName);
-    while (!this.stopping) {
+    // Not after a Ctrl-C, as `RCMetricsSampler.sample`.
+    while (!this.stopping && !interruptRaised()) {
       // A workspace whose containers were not up yet at the first poll gets another
       // chance, which is what makes wrapping a create work.
       if (ids.length === 0) ids = await containerIds(this.reproName);

@@ -5,7 +5,9 @@ import type { Event } from '../../../src/lib/events';
 
 import { sayReady } from '../../../src/core/lifecycle/ready';
 
+import type * as NotesNS from '../../../src/core/lifecycle/notes';
 import type * as ReadyNS from '../../../src/core/lifecycle/ready';
+import type * as PresetsNS from '../../../src/lib/presets/index';
 import type * as RcapiNS from '../../../src/core/rcapi';
 import type * as RecordNS from '../../../src/core/runner/record';
 
@@ -70,6 +72,83 @@ describe('announcing readiness', () => {
   });
 });
 
+describe('a rebuild that moved the address', () => {
+  it('moves Site_Url once, before the preset setup, and only while it names the old address', async () => {
+    // An http oidc workspace upgraded to 9.0.0 and rebuilt onto https kept Site_Url on http:
+    // Rocket.Chat keeps the stored setting and sent the https page to it, which never loaded.
+    jest.resetModules();
+    let site: unknown = 'http://rc.example.test';
+    const set: string[] = [];
+    const order: string[] = [];
+    jest.doMock('../../../src/core/runner/queries', () => ({
+      ...jest.requireActual<object>('../../../src/core/runner/queries'),
+      rcState: async () => 'running',
+      rcRestartCount: async () => 0,
+    }));
+    jest.doMock('../../../src/core/rcapi', () => ({
+      ...jest.requireActual<object>('../../../src/core/rcapi'),
+      waitReady: async () => ({ version: '9.0.0' }),
+      completeSetupWizard: async () => false,
+      licenseInfo: async () => null,
+      getSetting: async () => site,
+      setSetting: async (_url: string, _auth: unknown, _pw: string, id: string, value: string) => {
+        set.push(`${id}=${value}`);
+        order.push('Site_Url');
+        site = value;
+        return true;
+      },
+    }));
+    jest.doMock('../../../src/core/lifecycle/admin', () => ({
+      login: async () => ({ token: 't', userId: 'u' }),
+    }));
+    jest.doMock('../../../src/core/postready', () => ({
+      runPostReady: async () => {
+        order.push('preset setup');
+      },
+    }));
+    try {
+      const ready = require('../../../src/core/lifecycle/ready') as typeof ReadyNS;
+      const record = require('../../../src/core/runner/record') as typeof RecordNS;
+      const moved = (): RecordNS.Metadata =>
+        record.metadata({
+          name: 'moved',
+          rcVersion: '9.0.0',
+          rootUrl: 'http://localhost:3000',
+          publicUrl: 'https://rc.example.test',
+          extra: { site_url_moved_from: 'http://rc.example.test' },
+        });
+      await record.writeRecord('moved', moved());
+      const said: string[] = [];
+      await ready.waitAndFinalize(moved(), (event: Event) => said.push(event.message), 300, false);
+      expect(set).toEqual(['Site_Url=https://rc.example.test']);
+      expect(order).toEqual(['Site_Url', 'preset setup']);
+      expect(said).toContain(
+        'Site_Url moved from http://rc.example.test to https://rc.example.test, where this ' +
+          'workspace is now served',
+      );
+      expect((await record.readMeta('moved')).extra.site_url_moved_from).toBeUndefined();
+      // Once: the next `ready` leaves it alone.
+      await ready.waitAndFinalize(await record.readMeta('moved'), () => undefined, 300, false);
+      expect(set).toHaveLength(1);
+      // Set by hand to another address: kept, and the marker goes all the same.
+      site = 'https://by-hand.example.test';
+      await record.writeRecord('moved', moved());
+      await ready.waitAndFinalize(moved(), () => undefined, 300, false);
+      expect(set).toHaveLength(1);
+      expect((await record.readMeta('moved')).extra.site_url_moved_from).toBeUndefined();
+    } finally {
+      for (const module of [
+        '../../../src/core/runner/queries',
+        '../../../src/core/rcapi',
+        '../../../src/core/lifecycle/admin',
+        '../../../src/core/postready',
+      ])
+        jest.dontMock(module);
+      jest.resetModules();
+    }
+  });
+});
+
 describe('the license Rocket.Chat was given', () => {
   it('says and records a refusal, records an acceptance, and records nothing it could not ask', async () => {
     // Measured live: a license bound to another URL was installed and refused ("Url
@@ -86,9 +165,10 @@ describe('the license Rocket.Chat was given', () => {
       ...jest.requireActual<object>('../../../src/core/rcapi'),
       waitReady: async () => ({ version: '8.9.0' }),
       completeSetupWizard: async () => false,
-      licenseValid: async (rootUrl: string) => {
+      licenseInfo: async (rootUrl: string) => {
         asked.push(rootUrl);
-        return answers.length > 0 ? answers.shift() : null;
+        const valid = answers.length > 0 ? answers.shift() : null;
+        return typeof valid === 'boolean' ? { valid, modules: [] } : null;
       },
       getSetting: async () => 'https://ticket.example.test',
     }));
@@ -154,6 +234,220 @@ describe('the license Rocket.Chat was given', () => {
       asked.length = 0;
       expect((await run({})).status).toBeUndefined();
       expect(asked).toEqual([]);
+    } finally {
+      for (const module of [
+        '../../../src/core/runner/queries',
+        '../../../src/core/rcapi',
+        '../../../src/core/lifecycle/admin',
+        '../../../src/core/postready',
+      ])
+        jest.dontMock(module);
+      jest.resetModules();
+    }
+  });
+
+  it('asks again where Rocket.Chat 9 refuses the sign-in, so a license added there later is seen', async () => {
+    // Created with neither a license nor a token, then a license added in Administration →
+    // Subscription and `ready` run, as the notes say: the record kept saying neither, so the
+    // notes and the panel said "refused" after sign-in worked.
+    jest.resetModules();
+    type Answer = { valid: boolean; modules: string[] | null } | null;
+    let answers: Answer[] = [];
+    const asked: string[] = [];
+    jest.doMock('../../../src/core/rcapi', () => ({
+      ...jest.requireActual<object>('../../../src/core/rcapi'),
+      licenseInfo: async (rootUrl: string) => {
+        asked.push(rootUrl);
+        return answers.length > 0 ? answers.shift() : null;
+      },
+    }));
+    try {
+      const ready = require('../../../src/core/lifecycle/ready') as typeof ReadyNS;
+      const record = require('../../../src/core/runner/record') as typeof RecordNS;
+      const notes = require('../../../src/core/lifecycle/notes') as typeof NotesNS;
+      const presets = require('../../../src/lib/presets/index') as typeof PresetsNS;
+      const pauses: number[] = [];
+      const run = async (rcVersion: string, extra: Record<string, unknown>) => {
+        const meta = record.metadata({
+          name: 'lic9',
+          preset: 'oidc',
+          rcVersion,
+          rootUrl: 'http://localhost:3000',
+          extra: { post_ready: presets.load('oidc', {}).postReady, ...extra },
+        });
+        await record.writeRecord('lic9', meta);
+        const said: string[] = [];
+        await ready.checkLicense(
+          meta,
+          { token: 't', userId: 'u' },
+          (e) => said.push(e.message),
+          async (ms) => {
+            pauses.push(ms);
+          },
+        );
+        const after = await record.readMeta('lic9');
+        return {
+          said,
+          extra: after.extra,
+          note: notes
+            .signInGroup(after)
+            .flatMap((g) => g.body)
+            .join(' '),
+        };
+      };
+      const PREMIUM = ['ldap-enterprise', 'saml-enterprise', 'oauth-enterprise'];
+      // None yet: asked once (it is not still being applied), and the note says what was asked.
+      answers = [{ valid: false, modules: [] }];
+      const before = await run('9.0.0', {});
+      expect(asked).toHaveLength(1);
+      expect(pauses).toEqual([]);
+      expect(before.extra.license_status).toBeUndefined();
+      expect(before.extra.license_modules).toEqual([]);
+      expect(before.note).toContain('Rocket.Chat had no such license when houston last asked it');
+      // Added in Rocket.Chat: said, recorded, and the note's licence lines go.
+      answers = [{ valid: true, modules: PREMIUM }];
+      const after = await run('9.0.0', { license_modules: [] });
+      expect(after.said).toContain(
+        'Rocket.Chat has a license carrying oauth-enterprise: sign-in through the oidc preset ' +
+          'is no longer refused',
+      );
+      expect(after.extra.license_status).toBe('valid');
+      expect(after.extra.license_modules).toEqual(PREMIUM);
+      expect(after.note).not.toContain('Premium plan');
+      // Removed or expired: the status goes, never "refused" for one houston did not give.
+      answers = [{ valid: false, modules: [] }];
+      const gone = await run('9.0.0', { license_status: 'valid', license_modules: PREMIUM });
+      expect(gone.extra.license_status).toBeUndefined();
+      expect(gone.note).toContain('Premium plan');
+      // A registration token that brought none: asked too, and the line comes back.
+      answers = [{ valid: false, modules: [] }];
+      expect((await run('9.0.0', { registered: true })).note).toContain('Premium plan');
+      // Could not ask: what was recorded stays.
+      answers = [];
+      const unknown = await run('9.0.0', { license_status: 'valid', license_modules: PREMIUM });
+      expect(unknown.extra.license_modules).toEqual(PREMIUM);
+      // Before 9.0 nothing is refused, so nothing is asked.
+      asked.length = 0;
+      answers = [{ valid: true, modules: PREMIUM }];
+      expect((await run('8.9.1', {})).extra.license_modules).toBeUndefined();
+      expect(asked).toEqual([]);
+    } finally {
+      jest.dontMock('../../../src/core/rcapi');
+      jest.resetModules();
+    }
+  });
+});
+
+describe("post-ready's advice, where Rocket.Chat 9 refuses the sign-in", () => {
+  it('is handed the license gate, so it does not advise a re-run that cannot help', async () => {
+    // A 9.0 saml workspace with no license: `up` said "Rocket.Chat itself is fine. Re-run ...
+    // houston ready", and `ready` fails the same way until a license is added.
+    jest.resetModules();
+    const gates: unknown[] = [];
+    jest.doMock('../../../src/core/runner/queries', () => ({
+      ...jest.requireActual<object>('../../../src/core/runner/queries'),
+      rcState: async () => 'running',
+      rcRestartCount: async () => 0,
+    }));
+    jest.doMock('../../../src/core/rcapi', () => ({
+      ...jest.requireActual<object>('../../../src/core/rcapi'),
+      waitReady: async () => ({ version: '9.0.0' }),
+      completeSetupWizard: async () => false,
+      licenseInfo: async () => null,
+    }));
+    jest.doMock('../../../src/core/lifecycle/admin', () => ({
+      login: async () => ({ token: 't', userId: 'u' }),
+    }));
+    jest.doMock('../../../src/core/postready', () => ({
+      runPostReady: async (
+        _m: unknown,
+        _a: unknown,
+        _e: unknown,
+        o?: { licenseGate?: unknown },
+      ) => {
+        gates.push(o?.licenseGate ?? null);
+        return [];
+      },
+    }));
+    try {
+      const ready = require('../../../src/core/lifecycle/ready') as typeof ReadyNS;
+      const record = require('../../../src/core/runner/record') as typeof RecordNS;
+      const presets = require('../../../src/lib/presets/index') as typeof PresetsNS;
+      const run = async (rcVersion: string, extra: Record<string, unknown>) => {
+        const meta = record.metadata({
+          name: 'gate9',
+          preset: 'saml',
+          rcVersion,
+          rootUrl: 'http://localhost:3000',
+          extra: { post_ready: presets.load('saml', {}).postReady, ...extra },
+        });
+        await ready.waitAndFinalize(meta, () => undefined);
+      };
+      await run('9.0.0', {});
+      await run('9.0.0', { license_modules: ['saml-enterprise'] });
+      await run('8.9.1', {});
+      expect(gates).toEqual([
+        { kinds: 'SAML', modules: 'saml-enterprise', through: 'saml', asked: false },
+        null,
+        null,
+      ]);
+    } finally {
+      for (const module of [
+        '../../../src/core/runner/queries',
+        '../../../src/core/rcapi',
+        '../../../src/core/lifecycle/admin',
+        '../../../src/core/postready',
+      ])
+        jest.dontMock(module);
+      jest.resetModules();
+    }
+  });
+
+  it("reads the gate from Rocket.Chat's answer this run, not the last one", async () => {
+    // A license added in Administration since the last `ready`: the setup was handed the
+    // record's old "none", and a failure for any other reason was blamed on the license.
+    jest.resetModules();
+    const gates: unknown[] = [];
+    jest.doMock('../../../src/core/runner/queries', () => ({
+      ...jest.requireActual<object>('../../../src/core/runner/queries'),
+      rcState: async () => 'running',
+      rcRestartCount: async () => 0,
+    }));
+    jest.doMock('../../../src/core/rcapi', () => ({
+      ...jest.requireActual<object>('../../../src/core/rcapi'),
+      waitReady: async () => ({ version: '9.0.0' }),
+      completeSetupWizard: async () => false,
+      licenseInfo: async () => ({ valid: true, modules: ['saml-enterprise'] }),
+    }));
+    jest.doMock('../../../src/core/lifecycle/admin', () => ({
+      login: async () => ({ token: 't', userId: 'u' }),
+    }));
+    jest.doMock('../../../src/core/postready', () => ({
+      runPostReady: async (
+        _m: unknown,
+        _a: unknown,
+        _e: unknown,
+        o?: { licenseGate?: unknown },
+      ) => {
+        gates.push(o?.licenseGate ?? null);
+        return [];
+      },
+    }));
+    try {
+      const ready = require('../../../src/core/lifecycle/ready') as typeof ReadyNS;
+      const record = require('../../../src/core/runner/record') as typeof RecordNS;
+      const presets = require('../../../src/lib/presets/index') as typeof PresetsNS;
+      const meta = record.metadata({
+        name: 'added9',
+        project: 'houston-added9',
+        preset: 'saml',
+        rcVersion: '9.0.0',
+        rootUrl: 'http://localhost:3000',
+        extra: { post_ready: presets.load('saml', {}).postReady, license_modules: [] },
+      });
+      await record.writeRecord('added9', meta);
+      await ready.waitAndFinalize(meta, () => undefined);
+      expect(gates).toEqual([null]);
     } finally {
       for (const module of [
         '../../../src/core/runner/queries',

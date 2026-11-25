@@ -197,6 +197,33 @@ describe('planning an upgrade', () => {
     );
   });
 
+  it("says what 9.0 will ask of an oidc workspace's sign-in, before the upgrade and once", async () => {
+    // An http oidc workspace upgraded 8.9.1 -> 9.0.0 came up with a sign-in that returns to
+    // the login page and a licence gate, and nothing said so until someone tried it.
+    const { load } = jest.requireActual<{ load: (n: string) => { postReady: unknown[] } }>(
+      '../../src/lib/presets/index',
+    );
+    const oidc = {
+      preset: 'oidc',
+      extra: { runtime: 'docker', post_ready: load('oidc').postReady },
+    };
+    stubPlanInputs({ ...BASE_META, rcVersion: '8.9.1', ...oidc });
+    let upgrade = require('../../src/core/upgrade') as typeof UpgradeNS;
+    const warnings = (await upgrade.plan('w', '9.0.0', { offline: true })).warnings as string[];
+    expect(warnings.join('\n')).toContain(
+      'after the upgrade to 9.0.0: Rocket.Chat 9.0 and later refuse Custom OAuth sign-in',
+    );
+    // On 9.0.x one line: neither plain http nor houston's HTTPS finishes it, so no rebuild advice.
+    expect(warnings.join('\n')).toContain(
+      'after the upgrade to 9.0.0: Rocket.Chat 9.0 cannot finish this OAuth sign-in through houston',
+    );
+    expect(warnings.join('\n')).not.toContain('Rebuild it');
+    // Already on 9.0: its notes say it, so a patch upgrade does not repeat it.
+    stubPlanInputs({ ...BASE_META, rcVersion: '9.0.0', ...oidc });
+    upgrade = require('../../src/core/upgrade') as typeof UpgradeNS;
+    expect((await upgrade.plan('w', '9.0.1', { offline: true })).warnings).toEqual([]);
+  });
+
   it('refuses a version releases.rocket.chat does not have', async () => {
     // From the map alone any x.y.z in a known series looked real: the GUI planned, and
     // enabled, an upgrade to 8.99.0 that would have taken a backup and failed on the pull.

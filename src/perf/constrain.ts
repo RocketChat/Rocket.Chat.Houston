@@ -15,6 +15,7 @@ import { formatG, parseFloat_ } from '../lib/format';
 import { dockerCapacity } from '../core/runner/host';
 import { serviceContainerIds } from '../core/runner/engine';
 import { docker } from '../seams/docker-cli';
+import { cleanup } from '../seams/exec';
 
 const MEM_RE = /^\d+(\.\d+)?(g|gb|m|mb)$/u;
 
@@ -240,7 +241,9 @@ export async function apply(name: string, perService: Record<string, Limit>): Pr
       }
     }
   } catch (error) {
-    await restore(applied);
+    // As cleanup, so a Ctrl-C that raised in here does not end the process before the caps
+    // already set go back: nothing has noted them yet, so nothing else would.
+    await cleanup(async () => await restore(applied));
     throw error;
   }
   return applied;

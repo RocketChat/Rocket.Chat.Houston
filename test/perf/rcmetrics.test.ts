@@ -1,4 +1,5 @@
 import type * as ModNS from '../../src/perf/rcmetrics';
+import type * as ExecNS from '../../src/seams/exec';
 
 import { METRICS, ServiceSeries, parseProm } from '../../src/perf/rcmetrics';
 
@@ -164,5 +165,72 @@ describe('the sampler', () => {
     const started = Date.now();
     await sampler.stop();
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe('the sampler and a Ctrl-C', () => {
+  /**
+   * A sample in flight when the Ctrl-C came rejected the loop, so `stop()` in the run's
+   * restore threw; and a sample started after it ended the process before the restore ran.
+   */
+  it('ends its loop when the Ctrl-C takes the sample in flight, and stop() reports what it had', async () => {
+    jest.resetModules();
+    const exec = require('../../src/seams/exec') as typeof ExecNS;
+    let calls = 0;
+    jest.doMock('../../src/core/runner/engine', () => ({
+      composeExecCapture: async () => {
+        calls += 1;
+        if (calls > 1) await exec.sleep(60_000);
+        return [0, 'rocketchat_ddp_connected_users 7\n'];
+      },
+    }));
+    const { RCMetricsSampler } = require('../../src/perf/rcmetrics') as typeof ModNS;
+    let ended = 0;
+    try {
+      const report = await exec.unwindsOnInterrupt(async () => {
+        const sampler = new RCMetricsSampler('ws', ['rocketchat'], 0.01).start();
+        await new Promise((r) => setTimeout(r, 50));
+        exec.interrupt(() => (ended += 1));
+        return await exec.cleanup(async () => await sampler.stop());
+      });
+      expect(report.rocketchat?.ddp_users?.n).toBe(1);
+      expect(calls).toBe(2);
+      expect(ended).toBe(0);
+    } finally {
+      exec.resetInterruptForTest();
+    }
+  });
+
+  it('starts no sample after a Ctrl-C, which would end the process before the restore', async () => {
+    jest.resetModules();
+    const exec = require('../../src/seams/exec') as typeof ExecNS;
+    let calls = 0;
+    jest.doMock('../../src/core/runner/engine', () => ({
+      composeExecCapture: async () => {
+        await exec.interruptPoint();
+        calls += 1;
+        return [0, 'rocketchat_ddp_connected_users 7\n'];
+      },
+    }));
+    const { RCMetricsSampler } = require('../../src/perf/rcmetrics') as typeof ModNS;
+    let ended = 0;
+    try {
+      const outcome = await exec.unwindsOnInterrupt(async () => {
+        const sampler = new RCMetricsSampler('ws', ['rocketchat'], 0.05).start();
+        // The run's own wait, which the Ctrl-C is raised in.
+        const k6 = exec.sleep(60_000);
+        await new Promise((r) => setTimeout(r, 10));
+        exec.interrupt(() => (ended += 1));
+        await k6.catch(() => undefined);
+        // Past the sampler's next round.
+        await new Promise((r) => setTimeout(r, 120));
+        if (ended > 0) return 'ended';
+        return await exec.cleanup(async () => await sampler.stop());
+      });
+      expect(outcome).toEqual({ rocketchat: expect.anything() });
+      expect(calls).toBe(1);
+    } finally {
+      exec.resetInterruptForTest();
+    }
   });
 });

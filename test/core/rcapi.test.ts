@@ -6,6 +6,7 @@
  * Rocket.Chat answers 200 for something that did not work.
  */
 import { installAuditRecorder } from '../../src/lib/audit';
+import { Interrupted } from '../../src/seams/exec';
 import { RequestFailed, rcHttp, type HttpResponse } from '../../src/seams/rc-http';
 
 import {
@@ -24,7 +25,7 @@ import {
   fetchSamlIdpCert,
   generatePat,
   getSetting,
-  licenseValid,
+  licenseInfo,
   login,
   methodSucceeded,
   newestMailStamp,
@@ -581,15 +582,55 @@ describe('the calls that answer 200 for something that did not work', () => {
     ];
     const ours: unknown[] = [];
     for (const name of names) {
-      script([], new RequestFailed('connection refused', 'http://x'));
-      expect(await addOauthService('http://x', { token: 't', userId: 'u' }, 'pw', name)).toBe(
-        false,
+      // A release before 3.8 has no REST route, so the method is what it is sent.
+      script(
+        [[at('/settings.addCustomOAuth'), { status: 404, text: '{}' }]],
+        new RequestFailed('connection refused', 'http://x'),
       );
-      ours.push((seen[0]?.json as { message?: unknown } | undefined)?.message);
+      expect(await addOauthService('http://x', { token: 't', userId: 'u' }, 'pw', name)).toBe(
+        'Rocket.Chat refused the addOAuthService method',
+      );
+      const sent = seen.find((r) => r.url.endsWith('/api/v1/method.call/addOAuthService'));
+      ours.push((sent?.json as { message?: unknown } | undefined)?.message);
     }
     expect(ours).toEqual(recorded);
     expect(ours[0]).toBe(
       '{"msg": "method", "id": "1", "method": "addOAuthService", "params": ["Keycloak"]}',
+    );
+  });
+
+  it('creates a Custom OAuth provider through settings.addCustomOAuth, which 9.0 still has', async () => {
+    // 9.0.0 removed the addOAuthService method (#40656); the REST route exists from 3.8.
+    script([[at('/api/v1/settings.addCustomOAuth'), { status: 200, text: '{"success":true}' }]]);
+    expect(await addOauthService('http://x', { token: 't', userId: 'u' }, 'pw', 'Keycloak')).toBe(
+      null,
+    );
+    expect(seen.map((r) => [r.method, r.url, r.json])).toEqual([
+      ['POST', 'http://x/api/v1/settings.addCustomOAuth', { name: 'Keycloak' }],
+    ]);
+  });
+
+  it("says why a provider was not created, in Rocket.Chat's words where it gave some", async () => {
+    // 9.0.0's licence middleware, without oauth-enterprise.
+    script([
+      [
+        at('/api/v1/settings.addCustomOAuth'),
+        {
+          status: 400,
+          text: '{"success":false,"error":"This is an enterprise feature [error-action-not-allowed]","errorType":"error-action-not-allowed"}',
+        },
+      ],
+    ]);
+    const auth = { token: 't', userId: 'u' };
+    expect(await addOauthService('http://x', auth, 'pw', 'Keycloak')).toBe(
+      'This is an enterprise feature [error-action-not-allowed]',
+    );
+    expect(seen.some((r) => r.url.includes('method.call'))).toBe(false);
+    script([[at('/api/v1/settings.addCustomOAuth'), { status: 502, text: 'bad gateway' }]]);
+    expect(await addOauthService('http://x', auth, 'pw', 'Keycloak')).toBe('HTTP 502');
+    script([], new RequestFailed('connection refused', 'http://x'));
+    expect(await addOauthService('http://x', auth, 'pw', 'Keycloak')).toBe(
+      'no answer from Rocket.Chat: connection refused',
     );
   });
 
@@ -600,6 +641,16 @@ describe('the calls that answer 200 for something that did not work', () => {
     expect(await setSetting('http://x', { token: 't', userId: 'u' }, 'pw', 'A', 1)).toBe(false);
     script([], new RequestFailed('refused', 'http://x'));
     expect(await setSetting('http://x', { token: 't', userId: 'u' }, 'pw', 'A', 1)).toBe(false);
+  });
+
+  it('passes a Ctrl-C on rather than answering it as a setting it could not read or write', async () => {
+    // Answered as false, the load test it interrupted carried on to its next request, and
+    // that ended the process before the run's restore put the rate limiter back.
+    const auth = { token: 't', userId: 'u' };
+    script([], new Interrupted());
+    await expect(setSetting('http://x', auth, 'pw', 'A', 1)).rejects.toBeInstanceOf(Interrupted);
+    script([], new Interrupted());
+    await expect(getSetting('http://x', auth, 'pw', 'A')).rejects.toBeInstanceOf(Interrupted);
   });
 
   it('reads a setting value, and answers null when it cannot', async () => {
@@ -613,20 +664,30 @@ describe('the calls that answer 200 for something that did not work', () => {
     ).toBeNull();
   });
 
-  it('reads whether Rocket.Chat accepted its license, and answers null when it cannot say', async () => {
+  it('reads whether Rocket.Chat accepted its license and what it turns on, null when it cannot say', async () => {
     const auth = { token: 't', userId: 'u' };
-    script([], { status: 200, text: '{"license":{"hasValidLicense":true,"activeModules":[]}}' });
-    expect(await licenseValid('http://x', auth)).toBe(true);
+    // The shape measured on 9.0.0 with a Premium license.
+    script([], {
+      status: 200,
+      text: '{"license":{"hasValidLicense":true,"activeModules":["ldap-enterprise","saml-enterprise","oauth-enterprise"]}}',
+    });
+    expect(await licenseInfo('http://x', auth)).toEqual({
+      valid: true,
+      modules: ['ldap-enterprise', 'saml-enterprise', 'oauth-enterprise'],
+    });
     // Installed and refused ("Url validation failed"): the shape is the same, the answer no.
     script([], { status: 200, text: '{"license":{"hasValidLicense":false,"activeModules":[]}}' });
-    expect(await licenseValid('http://x', auth)).toBe(false);
+    expect(await licenseInfo('http://x', auth)).toEqual({ valid: false, modules: [] });
+    // A release that does not list its modules: valid, modules unknown rather than none.
+    script([], { status: 200, text: '{"license":{"hasValidLicense":true}}' });
+    expect(await licenseInfo('http://x', auth)).toEqual({ valid: true, modules: null });
     // A release whose licenses.info does not say, a refusal, a dead socket: not "no".
     script([], { status: 200, text: '{"license":{"activeModules":[]}}' });
-    expect(await licenseValid('http://x', auth)).toBeNull();
+    expect(await licenseInfo('http://x', auth)).toBeNull();
     script([], { status: 401, text: '{"success":false}' });
-    expect(await licenseValid('http://x', auth)).toBeNull();
+    expect(await licenseInfo('http://x', auth)).toBeNull();
     script([], new RequestFailed('refused', 'http://x'));
-    expect(await licenseValid('http://x', auth)).toBeNull();
+    expect(await licenseInfo('http://x', auth)).toBeNull();
   });
 
   it('asks the workspace which names are settings, and says null when it could not', async () => {
@@ -1068,14 +1129,35 @@ describe('the REST seam the callers go through', () => {
 });
 
 describe('a voice call extension', () => {
-  it('is set through users.update, and only a success body counts', async () => {
-    script([[at('/api/v1/users.update'), { status: 200, text: '{"success":true}' }]]);
+  // Each release's users.update body schema has additionalProperties: false, so the field it
+  // does not know is a 400, never a silent success.
+  const knows =
+    (field: string) =>
+    (url: string, options: Record<string, unknown>): boolean =>
+      url.endsWith('/api/v1/users.update') &&
+      field in ((options.json as { data?: object } | undefined)?.data ?? {});
+  const unknownField = { status: 400, text: '{"success":false,"errorType":"invalid-params"}' };
+
+  it('is set as sipExtension, the name Rocket.Chat 9.0 knows', async () => {
+    script([[knows('sipExtension'), { status: 200, text: '{"success":true}' }]], unknownField);
     expect(
       await setVoiceExtension('http://x', { token: 't', userId: 'u' }, 'pw', 'id1', '1001'),
     ).toBe(true);
-    const sent = seen.find((r) => r.url.endsWith('/api/v1/users.update'));
-    expect([sent?.method, sent?.json]).toEqual([
-      'POST',
+    expect(seen.map((r) => [r.method, r.json])).toEqual([
+      ['POST', { userId: 'id1', data: { sipExtension: '1001' } }],
+    ]);
+  });
+
+  it('falls back to freeSwitchExtension, the name 8.x knows, once the new one is refused', async () => {
+    script(
+      [[knows('freeSwitchExtension'), { status: 200, text: '{"success":true}' }]],
+      unknownField,
+    );
+    expect(
+      await setVoiceExtension('http://x', { token: 't', userId: 'u' }, 'pw', 'id1', '1001'),
+    ).toBe(true);
+    expect(seen.map((r) => r.json)).toEqual([
+      { userId: 'id1', data: { sipExtension: '1001' } },
       { userId: 'id1', data: { freeSwitchExtension: '1001' } },
     ]);
   });
@@ -1091,6 +1173,7 @@ describe('a voice call extension', () => {
     expect(
       await setVoiceExtension('http://x', { token: 't', userId: 'u' }, 'pw', 'id1', '1001'),
     ).toBe(false);
+    expect(seen).toHaveLength(2);
     script([], new RequestFailed('refused', 'http://x'));
     expect(
       await setVoiceExtension('http://x', { token: 't', userId: 'u' }, 'pw', 'id1', '1001'),

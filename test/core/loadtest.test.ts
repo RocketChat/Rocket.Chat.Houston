@@ -1,4 +1,6 @@
+import type * as JournalNS from '../../src/core/journal';
 import type * as LoadtestNS from '../../src/core/loadtest';
+import type * as ExecNS from '../../src/seams/exec';
 import * as runnerRecord from '../../src/core/runner/record';
 
 it('Grafana public URL regression: gives the load-test iframe the public sub-path URL', async () => {
@@ -1022,5 +1024,237 @@ describe('a load test duration', () => {
     expect(() => loadtestNS.refuseABadDuration(value, '--duration')).toThrow(
       expect.objectContaining({ code: 'VALIDATION_FAILED', exitCode: 2 }),
     );
+  });
+});
+
+describe('journey past 50 VUs per seeded user', () => {
+  afterEach(() => {
+    jest.resetModules();
+  });
+
+  it.each([
+    [50, 1, null],
+    [51, 1, 'journey at 51 VUs is more than 50, 50 per user for 1 seeded user:'],
+    [250, 5, null],
+    [251, 5, 'journey at 251 VUs is more than 250, 50 per user for 5 seeded users:'],
+    [51, 0, 'journey at 51 VUs is more than 50, 50 per user for the admin:'],
+  ])('%i VUs over %i users', async (vus, users, start) => {
+    const loadtest = require('../../src/core/loadtest') as typeof LoadtestNS;
+    const words = loadtest.sessionLimitWarning('journey', vus, users);
+    if (start === null) expect(words).toBeNull();
+    else expect(words).toMatch(new RegExp(`^${start} Rocket.Chat keeps 50 sessions per user`));
+    // Only journey keeps a fresh session per VU; the others never trip it.
+    expect(loadtest.sessionLimitWarning('messages', vus, users)).toBeNull();
+  });
+
+  function fakes(): { loadtest: typeof LoadtestNS; deps: LoadtestNS.LoadtestDeps } {
+    jest.doMock('../../src/core/rcapi', () => ({
+      ...jest.requireActual('../../src/core/rcapi'),
+      getSetting: async () => false,
+      setSetting: async () => true,
+    }));
+    const loadtest = require('../../src/core/loadtest') as typeof LoadtestNS;
+    const deps = loadtest.depsWith({
+      k6: {
+        ...jest.requireActual<object>('../../src/perf/k6'),
+        run: async () => ({ p95: 1, rps: 2, error_rate: 0 }),
+      } as never,
+      rcmetrics: {
+        ...jest.requireActual<object>('../../src/perf/rcmetrics'),
+        RCMetricsSampler: class {
+          start(): this {
+            return this;
+          }
+          async stop(): Promise<Record<string, never>> {
+            return {};
+          }
+        },
+      } as never,
+    });
+    return { loadtest, deps };
+  }
+
+  const prepared = {
+    auth: { token: 'admin', userId: 'admin-id' },
+    m: runnerRecord.metadata({ name: 'w', rootUrl: 'http://127.0.0.1:19001', adminPassword: 's' }),
+    perService: {},
+    rcServices: ['rocketchat'],
+    rules: [],
+    target: 'http://rocketchat:3000',
+    token: 'pat',
+    users: [{ username: 'alice', password: 'alice', token: 't', uid: 'a' }],
+  };
+
+  it('a capacity search says it once, at the first step past the limit', async () => {
+    const { loadtest, deps } = fakes();
+    const req = loadtest.capacityReq({ name: 'w', scenario: 'journey', start: 40, maxVus: 160 });
+    const said: string[] = [];
+    await loadtest.runPreparedCapacity(req, prepared as never, () => undefined, deps, {
+      warn: (message) => said.push(message),
+      step: (row) => said.push(`step ${String(row.vus)}`),
+    });
+    expect(said.map((line) => line.replace(/ is more than .*/su, ''))).toEqual([
+      'step 40',
+      '  ⚠ journey at 80 VUs',
+      'step 80',
+      'step 160',
+    ]);
+
+    // The GUI's job hears it as a warning event.
+    const events: { level: string; message: string }[] = [];
+    await loadtest.runPreparedCapacity(
+      req,
+      prepared as never,
+      ((e: never) => events.push(e)) as never,
+      deps,
+    );
+    expect(events.filter((e) => e.message.startsWith('journey at'))).toEqual([
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('80 VUs') }),
+    ]);
+  });
+
+  it('a load test says it for its peak, spike or plain', async () => {
+    const { loadtest, deps } = fakes();
+    const said: string[] = [];
+    const cli = { warn: (message: string) => said.push(message) };
+    for (const shape of [{ vus: 20 }, { spike: '10:60' }, { vus: 51 }]) {
+      const req = loadtest.loadtestReq({ name: 'w', scenario: 'journey', diag: false, ...shape });
+      await loadtest.runPreparedLoadtest(req, prepared as never, () => undefined, deps, cli);
+    }
+    expect(said.map((line) => line.replace(/ is more than .*/su, ''))).toEqual([
+      '  ⚠ journey at 60 VUs',
+      '  ⚠ journey at 51 VUs',
+    ]);
+  });
+});
+
+describe('a Ctrl-C while k6 runs', () => {
+  /**
+   * The run was not unwound: a Ctrl-C stopped k6 and ended the process, the restore in
+   * the `finally` never ran, and the rate limiter stayed off until `serve` or `doctor`
+   * found the note. It now raises where the run waits, and the restore runs as cleanup.
+   */
+  afterEach(() => {
+    jest.resetModules();
+  });
+
+  function setUp() {
+    jest.resetModules();
+    const set: [string, unknown][] = [];
+    jest.doMock('../../src/core/rcapi', () => ({
+      ...jest.requireActual('../../src/core/rcapi'),
+      getSetting: async () => true,
+      setSetting: async (_u: string, _a: unknown, _p: string, id: string, value: unknown) => {
+        set.push([id, value]);
+        return true;
+      },
+    }));
+    const exec = require('../../src/seams/exec') as typeof ExecNS;
+    const journal = require('../../src/core/journal') as typeof JournalNS;
+    // The cases above leave notes on purpose; these count only their own.
+    const fs = require('node:fs') as {
+      rmSync: (p: string, o: { recursive: boolean; force: boolean }) => void;
+    };
+    fs.rmSync(journal.journalDir(), { recursive: true, force: true });
+    const loadtest = require('../../src/core/loadtest') as typeof LoadtestNS;
+    let started = (): void => undefined;
+    const k6Started = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const deps = loadtest.depsWith({
+      k6: {
+        ...jest.requireActual<object>('../../src/perf/k6'),
+        run: async () => {
+          started();
+          await exec.sleep(60_000);
+          return { p95: 1, rps: 1, error_rate: 0, count: 1 };
+        },
+      } as never,
+      rcmetrics: {
+        ...jest.requireActual<object>('../../src/perf/rcmetrics'),
+        RCMetricsSampler: class {
+          start(): this {
+            return this;
+          }
+          async stop(): Promise<Record<string, never>> {
+            return {};
+          }
+        },
+      } as never,
+    });
+    const prepared = {
+      auth: { token: 't', userId: 'u' },
+      m: {
+        name: 'w',
+        project: 'houston-w',
+        rcVersion: '8.9.1',
+        rootUrl: 'http://127.0.0.1:1',
+        extra: {},
+      },
+      perService: {},
+      rcServices: ['rocketchat'],
+      rules: [],
+      target: 'http://rocketchat:3000',
+      token: 'pat',
+      users: [],
+    } as never;
+    return { exec, journal, loadtest, deps, prepared, set, k6Started };
+  }
+
+  /** The run's outcome once the Ctrl-C has played out, or 'ended' if it ended the process. */
+  async function ctrlC(
+    exec: typeof ExecNS,
+    running: Promise<unknown>,
+    k6Started: Promise<void>,
+  ): Promise<unknown> {
+    let ended = (): void => undefined;
+    const end = new Promise<string>((resolve) => {
+      ended = () => resolve('ended');
+    });
+    await k6Started;
+    exec.interrupt(ended);
+    try {
+      return await Promise.race([
+        running.then(
+          () => 'finished',
+          (error: unknown) => error,
+        ),
+        end,
+      ]);
+    } finally {
+      exec.resetInterruptForTest();
+    }
+  }
+
+  it('puts the rate limiter back on, and raises the interrupt, from loadtest', async () => {
+    const { exec, journal, loadtest, deps, prepared, set, k6Started } = setUp();
+    const running = loadtest.runPreparedLoadtest(
+      loadtest.loadtestReq({ name: 'w', scenario: 'read', vus: 5 }),
+      prepared,
+      undefined,
+      deps,
+    );
+    expect(await ctrlC(exec, running, k6Started)).toBeInstanceOf(exec.Interrupted);
+    expect(set).toEqual([
+      ['API_Enable_Rate_Limiter', false],
+      ['API_Enable_Rate_Limiter', true],
+    ]);
+    expect(journal.openEntries()).toEqual([]);
+  });
+
+  it('puts the rate limiter back on, and raises the interrupt, from capacity', async () => {
+    const { exec, journal, loadtest, deps, prepared, set, k6Started } = setUp();
+    const running = loadtest.runPreparedCapacity(
+      loadtest.capacityReq({ name: 'w', scenario: 'read', start: 5, maxVus: 10 }),
+      prepared,
+      undefined,
+      deps,
+    );
+    expect(await ctrlC(exec, running, k6Started)).toBeInstanceOf(exec.Interrupted);
+    expect(set).toEqual([
+      ['API_Enable_Rate_Limiter', false],
+      ['API_Enable_Rate_Limiter', true],
+    ]);
+    expect(journal.openEntries()).toEqual([]);
   });
 });
