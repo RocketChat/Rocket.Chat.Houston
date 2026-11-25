@@ -17,18 +17,12 @@ import { EMAIL_2FA, truthyParam } from '../../lib/presets/common';
 import * as presets from '../../lib/presets/index';
 import { namesOf } from '../../lib/presets/composite';
 import { type Preset } from '../../lib/presets/types';
-import {
-  BUILD_SOURCE,
-  type ReleaseFetcher,
-  type Resolved,
-  isValidVersion,
-  lookupUrl,
-} from '../../lib/versions';
-import { parseVersion } from '../../lib/version-spec';
+import { BUILD_SOURCE, type ReleaseFetcher, type Resolved, lookupUrl } from '../../lib/versions';
 import * as topology from '../topology';
 import { planCluster } from '../kube/context';
 import { releaseInfo } from '../rcapi';
 
+import { premiumSignIn } from './notes';
 import {
   BILLABLE_CONTEXT_PREFIXES,
   BROWSER_HOST_PARAM,
@@ -120,38 +114,24 @@ export function voiceLicenceWarning(
   );
 }
 
-/** Presets whose login Rocket.Chat has announced will need a Premium plan from 9.0.0. */
-const PREMIUM_AUTH_PRESETS: Readonly<Record<string, string>> = {
-  ldap: 'LDAP',
-  saml: 'SAML',
-  oidc: 'Custom OAuth',
-};
-
 /**
- * Warn when a workspace's login preset may be refused on Rocket.Chat 9 for want of a licence,
- * or ''. Rocket.Chat 8.8 logs that LDAP and SAML login will need a Premium plan from 9.0.0,
- * and 8.9 says the same of Custom OAuth. The gates were open drafts on 2026-10-08 (PRs #41643
- * and #42477), so this says "may", and it is a warning, not a refusal.
+ * Warn when a workspace's login preset will be refused on Rocket.Chat 9 for want of a licence,
+ * or ''. A warning, not a refusal: the workspace still boots, and a licence can be added later.
+ * Worded for both front-ends: the GUI's job shows it too.
  */
 export function premiumAuthWarning(
-  presetNames: readonly string[],
+  pre: Pick<Preset, 'name' | 'postReady'>,
   rcVersion: string,
   licensed: boolean,
   regToken: string,
 ): string {
-  if (licensed || regToken !== '' || !isValidVersion(rcVersion)) return '';
-  if ((parseVersion(rcVersion).release[0] ?? 0) < 9) return '';
-  // EACH MEMBER of a composed name. Compose passed the preset it built, `email+ldap` or
-  // `ldap+multi-instance`, which matched nothing -- so Docker never warned for a combination
-  // while Kubernetes, passing the members, did.
-  const names = presetNames.flatMap((name) => namesOf(name));
-  const kinds = names.map((name) => PREMIUM_AUTH_PRESETS[name]).filter((kind) => kind);
-  if (kinds.length === 0) return '';
+  const gate = licensed || regToken !== '' ? null : premiumSignIn(pre, rcVersion);
+  if (gate === null) return '';
   return (
-    `Rocket.Chat 9.0 is set to require a Premium plan for ${kinds.join(' and ')} login, and ` +
-    `this workspace has neither --license nor --reg-token: logins through the ` +
-    `${names.filter((name) => name in PREMIUM_AUTH_PRESETS).join(' and ')} preset may be ` +
-    'refused. Add --license <file> or --reg-token <token> to test with one.'
+    `Rocket.Chat 9.0 and later refuse ${gate.kinds} login without a Premium plan (a license ` +
+    `carrying ${gate.modules}), and this workspace has neither a license nor a registration ` +
+    `token: logins through the ${gate.through} preset will be refused. Give it one when ` +
+    "creating (--license or --reg-token; in the GUI, Add a license), or add one later as the workspace's notes say."
   );
 }
 

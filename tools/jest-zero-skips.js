@@ -179,7 +179,13 @@ const ROOT = path.resolve(__dirname, '..');
 // answers, adopted from the sample integration when a rebuilt record forgot it, replaced and
 // repointed when lost, nothing wired while the API cannot be reached, the first build's
 // action still accepted, and the --bind warning naming the inbox UI.
-const FLOOR = 4850;
+// Plus 51 for 2.1.9: 29 from the Rocket.Chat 9.0 presets (the provider through
+// addCustomOAuth, sipExtension, the license-driven sign-in notes, SAML and Kubernetes at a
+// --root-url, the Site_Url move); 12 from the load-test guide (the k6 scripts run in node:vm,
+// mixed logging out, spike and ramp starting VUs, the journey warning, the --spike base); and
+// 10 from a Ctrl-C putting back what a load test changed (the unwind, the settings calls, both
+// samplers, the cap rollback) and leftover notes undone newest first.
+const FLOOR = 4901;
 
 /** Every authored construct that removes a test from a run or inverts what it asserts. */
 const SKIP_CONSTRUCTS = [

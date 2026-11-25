@@ -254,7 +254,8 @@ function buildAndLicense(meta: Metadata): {
   const extra = bag(meta.extra);
   return {
     ci_build: isBuildTag(tag) ? tag : '',
-    licensed: extra.licensed === true,
+    // Or one added later in Rocket.Chat itself, which `ready` found there.
+    licensed: extra.licensed === true || extra.license_status === 'valid',
     license_refused: extra.license_status === 'refused',
   };
 }

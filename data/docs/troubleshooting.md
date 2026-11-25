@@ -47,6 +47,15 @@ houston logs  --name <name> --tail 100
 houston stats --name <name>          # a climbing restart count means it is out of memory
 ```
 
+SAML sign-in stops at Keycloak's "Invalid redirect uri": the workspace was made with
+`--root-url` by houston 2.1.8 or earlier, and its Keycloak still accepts only `localhost`.
+`ready` and `restart` do not change that. Rebuild it with the flags it was made with, plus
+`--force`; its data is kept:
+
+```bash
+houston up --name <name> --version <version> --preset saml --root-url <url> --force --wait
+```
+
 ## Rocket.Chat's own behaviour, not houston's
 
 Seen on Rocket.Chat 8.5.1, and the same with or without houston's edge in front:
@@ -94,7 +103,8 @@ Names are lowercase: `TICKET-1234` lives in namespace `houston-ticket-1234`.
 | "the ingress controller's built-in placeholder certificate" | Normal for a minute or three on a new cluster. `houston tls-status --name <name>` again; `kubectl -n houston-<name> get certificate` shows what it waits for. |
 | Let's Encrypt never validates | The name must point at the right place, port 443 open, **before** `up`. On a cloud cluster, point it at the address `houston cluster prepare --context <cluster>` prints. On Cloudflare use **DNS only**. Check with `dig +short <name> @1.1.1.1`. |
 | "something in front is terminating TLS for this name" | A proxy, CDN or another program is intercepting. `houston doctor` names a cluster holding the ports. |
-| Behind a tunnel or a proxy that terminates TLS (Cloudflare proxied, a load balancer) | TLS-ALPN cannot pass it. `houston config set acme.challenge http` makes Let's Encrypt validate over plain HTTP on `:80` instead; `up --domain` and `serve --domain` both use it. Send the name's HTTP to this host's `:80`. |
+| Behind a proxy that terminates TLS (Cloudflare proxied, a load balancer) | TLS-ALPN cannot pass it. `houston config set acme.challenge http` makes Let's Encrypt validate over plain HTTP on `:80` instead; `up --domain` and `serve --domain` both use it. Send the name's HTTP to this host's `:80`. |
+| Behind a tunnel (cloudflared) | Point the tunnel at the edge, `https://localhost:443`, with the name as its origin server name and Host header, and certificate verification off (Cloudflare: No TLS Verify): Let's Encrypt cannot reach a tunnelled host, so the edge has only its default certificate. Not `:80`, which redirects to HTTPS and loops; not Rocket.Chat's own port, where `/keycloak`, `/mailpit` and the other preset paths answer with Rocket.Chat's page. |
 | The browser warns about a local certificate | Run `houston trust-ca` once, then `houston tls-status --name <name>` says it is trusted. Phones cannot use local certificates: use `--domain`. |
 | No "Local certificate" option in the GUI | The cluster is not on this machine; houston's CA key never leaves it. Use a domain. |
 

@@ -2,7 +2,7 @@
   "verdicts": [
     {"code":2,"help":"houston [OPTIONS] COMMAND [ARGS]..."},
     {"code":0,"help":"houston [OPTIONS] COMMAND [ARGS]..."},
-    {"code":0,"stdout":"houston 2.1.8\n","stderr":""},
+    {"code":0,"stdout":"houston 2.1.9\n","stderr":""},
     {"code":2,"stdout":"","stderr":"Usage: houston [OPTIONS] COMMAND [ARGS]...\nTry 'houston --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ No such option: -h                                                           │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"},
     {"code":2,"stdout":"","stderr":"Usage: houston [OPTIONS] COMMAND [ARGS]...\nTry 'houston --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────────────────────────╮\n│ No such option: -h                                                                               │\n╰──────────────────────────────────────────────────────────────────────────────────────────────────╯\n"},
     {"code":2,"stdout":"","stderr":"Usage: houston [OPTIONS] COMMAND [ARGS]...\nTry 'houston --help' for help.\n╭─ Error ──────────────────────────────────╮\n│ No such option: -h                       │\n╰──────────────────────────────────────────╯\n"},
@@ -945,11 +945,11 @@
     {"ran":"serve","values":{"port":5}},
     {"code":2,"stdout":"","stderr":"Usage: houston serve [OPTIONS]\nTry 'houston serve --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value for '--port': 'abc' is not a valid integer.                    │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"},
     {"code":2,"stdout":"","stderr":"error: cannot read <home>/users: Is a directory\n"},
-    {"code":2,"stdout":"{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"VALIDATION_FAILED\", \"message\": \"cannot read <home>/users: Is a directory\"}, \"generated_at\": \"-\", \"houston_version\": \"2.1.8\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n","stderr":"error: cannot read <home>/users: Is a directory\n"},
+    {"code":2,"stdout":"{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"VALIDATION_FAILED\", \"message\": \"cannot read <home>/users: Is a directory\"}, \"generated_at\": \"-\", \"houston_version\": \"2.1.9\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n","stderr":"error: cannot read <home>/users: Is a directory\n"},
     {"code":2,"stdout":"","stderr":"error: cannot read <home>/users: Permission denied\n"},
-    {"code":2,"stdout":"{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"VALIDATION_FAILED\", \"message\": \"cannot read <home>/users: Permission denied\"}, \"generated_at\": \"-\", \"houston_version\": \"2.1.8\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n","stderr":"error: cannot read <home>/users: Permission denied\n"},
+    {"code":2,"stdout":"{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"VALIDATION_FAILED\", \"message\": \"cannot read <home>/users: Permission denied\"}, \"generated_at\": \"-\", \"houston_version\": \"2.1.9\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n","stderr":"error: cannot read <home>/users: Permission denied\n"},
     {"code":1,"stdout":"","stackTrace":"error: <home>/users is not valid UTF-8 (byte 0xff at position 2: invalid start byte) - this is unhandled, and the stack trace is on stderr. If it names a file under HOUSTON_HOME, that file is the problem."},
-    {"code":1,"stdout":"{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"REPRO_ERROR\", \"message\": \"<home>/users is not valid UTF-8 (byte 0xff at position 2: invalid start byte) - this is unhandled, and the stack trace is on stderr. If it names a file under HOUSTON_HOME, that file is the problem.\"}, \"generated_at\": \"-\", \"houston_version\": \"2.1.8\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n","stackTrace":"error: <home>/users is not valid UTF-8 (byte 0xff at position 2: invalid start byte) - this is unhandled, and the stack trace is on stderr. If it names a file under HOUSTON_HOME, that file is the problem."},
+    {"code":1,"stdout":"{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"REPRO_ERROR\", \"message\": \"<home>/users is not valid UTF-8 (byte 0xff at position 2: invalid start byte) - this is unhandled, and the stack trace is on stderr. If it names a file under HOUSTON_HOME, that file is the problem.\"}, \"generated_at\": \"-\", \"houston_version\": \"2.1.9\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n","stackTrace":"error: <home>/users is not valid UTF-8 (byte 0xff at position 2: invalid start byte) - this is unhandled, and the stack trace is on stderr. If it names a file under HOUSTON_HOME, that file is the problem."},
     {"code":2,"stdout":"","stderr":"Usage: houston cluster [OPTIONS] [action] [name]\nTry 'houston cluster --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ No such option: --bogus (Possible options: --user)                           │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"},
     {"code":2,"stdout":"","stderr":"Usage: houston cluster [OPTIONS] [action] [name]\nTry 'houston cluster --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ No such option: --conte (Possible options: --context, --json, --zone)        │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"},
     {"ran":"cluster","values":{"days":7,"nodes":10}},
@@ -1017,7 +1017,10 @@
     {"code":2,"stdout":"","stderr":"Usage: houston up [OPTIONS]\nTry 'houston up --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value for '--seed-history-days': '7\\x1f' is not a valid integer.     │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"},
     {"code":2,"stdout":"","stderr":"Usage: houston up [OPTIONS]\nTry 'houston up --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value for '--seed-history-days': '\\ufeff7' is not a valid integer.   │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"},
     {"ran":"up","values":{"port":0,"replicas":0,"seed_history_days":5}},
-    {"code":2,"stdout":"","stderr":"Usage: houston up [OPTIONS]\nTry 'houston up --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value for '--seed-history-days': 'abc' is not a valid integer.       │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"}
+    {"code":2,"stdout":"","stderr":"Usage: houston up [OPTIONS]\nTry 'houston up --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Invalid value for '--seed-history-days': 'abc' is not a valid integer.       │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"},
+    {"code":2,"stdout":"","stderr":"Usage: houston presets [OPTIONS]\nTry 'houston presets --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ No such option: --js (Possible options: --json)                              │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"},
+    {"code":2,"stdout":"{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"VALIDATION_FAILED\", \"message\": \"No such option: --bogus\"}, \"generated_at\": \"-\", \"houston_version\": \"2.1.9\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n","stderr":"Usage: houston presets [OPTIONS]\nTry 'houston presets --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ No such option: --bogus                                                      │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"},
+    {"code":2,"stdout":"{\"contract\": 2, \"data\": null, \"error\": {\"code\": \"VALIDATION_FAILED\", \"message\": \"Got unexpected extra argument(s) (stray)\"}, \"generated_at\": \"-\", \"houston_version\": \"2.1.9\", \"ok\": false, \"schema\": \"houston.error.v1\", \"warnings\": []}\n","stderr":"Usage: houston presets [OPTIONS]\nTry 'houston presets --help' for help.\n╭─ Error ──────────────────────────────────────────────────────────────────────╮\n│ Got unexpected extra argument(s) (stray)                                     │\n╰──────────────────────────────────────────────────────────────────────────────╯\n"}
   ],
   "cases": {
     "rootShapes": {
@@ -2120,7 +2123,11 @@
       "[[\"up\",\"--seed-history-days\",\"nope\"],null]": 1003,
       "[[\"up\",\"--seed-history-days\",\"1_0\"],null]": 156,
       "[[\"up\",\"--seed-history-days\",\" 7 \"],null]": 156,
-      "[[\"up\",\"--seed-history-da\"],null]": 1004
+      "[[\"up\",\"--seed-history-da\"],null]": 1004,
+      "[[\"presets\",\"--json=yes\"],null]": 224,
+      "[[\"presets\",\"--js\"],null]": 1018,
+      "[[\"presets\",\"--json\",\"--bogus\"],null]": 1019,
+      "[[\"presets\",\"--json\",\"stray\"],null]": 1020
     },
     "narrowUsage": {
       "[[\"config-import\",\"--bogus\"],30]": 725,
@@ -3648,7 +3655,11 @@
         "[[\"up\",\"--seed-history-days\",\"nope\"],null]": 944,
         "[[\"up\",\"--seed-history-days\",\"1_0\"],null]": 944,
         "[[\"up\",\"--seed-history-days\",\" 7 \"],null]": 944,
-        "[[\"up\",\"--seed-history-da\"],null]": 944
+        "[[\"up\",\"--seed-history-da\"],null]": 944,
+        "[[\"presets\",\"--json=yes\"],null]": 944,
+        "[[\"presets\",\"--js\"],null]": 944,
+        "[[\"presets\",\"--json\",\"--bogus\"],null]": 945,
+        "[[\"presets\",\"--json\",\"stray\"],null]": 945
       },
       "mode 000": {
         "[[],null]": 0,
@@ -4619,7 +4630,11 @@
         "[[\"up\",\"--seed-history-days\",\"nope\"],null]": 946,
         "[[\"up\",\"--seed-history-days\",\"1_0\"],null]": 946,
         "[[\"up\",\"--seed-history-days\",\" 7 \"],null]": 946,
-        "[[\"up\",\"--seed-history-da\"],null]": 946
+        "[[\"up\",\"--seed-history-da\"],null]": 946,
+        "[[\"presets\",\"--json=yes\"],null]": 946,
+        "[[\"presets\",\"--js\"],null]": 946,
+        "[[\"presets\",\"--json\",\"--bogus\"],null]": 947,
+        "[[\"presets\",\"--json\",\"stray\"],null]": 947
       },
       "not UTF-8": {
         "[[],null]": 0,
@@ -5590,7 +5605,11 @@
         "[[\"up\",\"--seed-history-days\",\"nope\"],null]": 948,
         "[[\"up\",\"--seed-history-days\",\"1_0\"],null]": 948,
         "[[\"up\",\"--seed-history-days\",\" 7 \"],null]": 948,
-        "[[\"up\",\"--seed-history-da\"],null]": 948
+        "[[\"up\",\"--seed-history-da\"],null]": 948,
+        "[[\"presets\",\"--json=yes\"],null]": 948,
+        "[[\"presets\",\"--js\"],null]": 948,
+        "[[\"presets\",\"--json\",\"--bogus\"],null]": 949,
+        "[[\"presets\",\"--json\",\"stray\"],null]": 949
       }
     }
   }

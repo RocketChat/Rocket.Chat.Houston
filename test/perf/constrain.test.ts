@@ -1,4 +1,5 @@
 import type * as ModNS from '../../src/perf/constrain';
+import type * as ExecNS from '../../src/seams/exec';
 
 import { human, parse, resolveServices, restoreSwap, type Applied } from '../../src/perf/constrain';
 
@@ -294,6 +295,63 @@ describe('apply and restore against a stubbed docker', () => {
     const updates = seen.filter((c) => c[0] === 'update');
     expect(updates).toHaveLength(2);
     expect(updates[1]?.slice(0, 3)).toEqual(['update', '--cpus', '1']);
+  });
+
+  it('rolls back a cap it already set when a Ctrl-C lands part way through', async () => {
+    // The rollback was not cleanup, so its first docker call ended the process: the
+    // first service stayed capped, and no note said so, because none is written until the
+    // apply returns.
+    jest.resetModules();
+    const exec = require('../../src/seams/exec') as typeof ExecNS;
+    const seen: string[][] = [];
+    jest.doMock('../../src/seams/docker-cli', () => ({
+      docker: async (argv: string[]) => {
+        // A docker call is a wait a Ctrl-C reaches, as the real one is.
+        await exec.interruptPoint();
+        seen.push(argv);
+        if (argv[0] === 'inspect' && argv.includes('cid-mongodb')) await exec.sleep(60_000);
+        if (argv[0] === 'inspect') {
+          return { exitCode: 0, stdout: '1000000000 2000000000 4000000000', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    }));
+    jest.doMock('../../src/core/runner/engine', () => ({
+      serviceContainerIds: (_n: string, svc: string) => Promise.resolve([`cid-${svc}`]),
+    }));
+    jest.doMock('../../src/core/runner/host', () => ({
+      dockerCapacity: () => Promise.resolve([8.0, 16e9]),
+    }));
+    const mod = require('../../src/perf/constrain') as typeof ModNS;
+    let ended = (): void => undefined;
+    const end = new Promise<string>((resolve) => {
+      ended = () => resolve('ended');
+    });
+    try {
+      const applying = exec.unwindsOnInterrupt(
+        async () =>
+          await mod.apply('ws', {
+            rocketchat: { cpus: 2, mem: null },
+            mongodb: { cpus: 1, mem: null },
+          }),
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      exec.interrupt(ended);
+      const outcome = await Promise.race([
+        applying.then(
+          () => 'applied',
+          (error: unknown) => error,
+        ),
+        end,
+      ]);
+      expect(outcome).toBeInstanceOf(exec.Interrupted);
+      expect(seen.filter((c) => c[0] === 'update')).toEqual([
+        ['update', '--cpus', '2', 'cid-rocketchat'],
+        ['update', '--cpus', '1', 'cid-rocketchat'],
+      ]);
+    } finally {
+      exec.resetInterruptForTest();
+    }
   });
 
   it('restores ONLY the dimension it capped', async () => {

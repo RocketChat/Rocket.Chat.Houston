@@ -94,9 +94,10 @@ Every command explains itself with `--help`, for example `houston up --help`.
 
 | Guide | Read it when |
 |---|---|
-| [User guide](data/docs/guide.md) | you need a preset, sample data, a customer's settings, backups and upgrades, HTTPS, monitoring, a load test or the REST API |
+| [User guide](data/docs/guide.md) | you need a preset, sample data, a customer's settings, backups and upgrades, HTTPS, monitoring or the REST API |
 | [Encrypted conversations (E2EE)](data/docs/e2ee.md) | the ticket concerns encrypted DMs, rooms or files |
 | [Voice calls](data/docs/voice.md) | the ticket concerns Voice calls or the SIP integration |
+| [Load testing and capacity](data/docs/loadtest.md) | the ticket is about slowness under load, or how much load a server takes |
 | [Kubernetes](data/docs/kubernetes.md) | the ticket needs Kubernetes, or Rocket.Chat as microservices |
 | [Rocket.Chat on EKS](data/docs/eks.md) | the ticket needs a real cloud cluster. A cluster costs money by the hour, so read the guide before you create one. `houston cluster guide` prints it, and `houston cluster overview` shows what is billing |
 | [Web GUI](data/docs/gui.md) | you prefer a browser, or you share one machine with your team, signing in with Okta or a password |

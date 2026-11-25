@@ -1344,12 +1344,16 @@ async function dispatch(
         io.writeOut('  --dry-run: nothing changed\n');
         return null;
       }
+      // The panel above said the plan's warnings; the run raises them again as it starts.
+      const said = new Set(strings(plan.warnings));
       return await upgrade.run(text(o.name), text(o.to), {
         offline: bool(o.offline),
         force: bool(o.force),
         noBackup: bool(o.no_backup),
         rollbackOnFailure: !bool(o.no_rollback),
-        emit,
+        emit: (event) => {
+          if (event.level !== 'warn' || !said.has(event.message)) emit(event);
+        },
       });
     }
     case 'stats':
@@ -1461,7 +1465,17 @@ async function dispatch(
     }
     case 'presets': {
       const presets = require('../lib/presets') as typeof PresetsNS;
-      return { presets: presets.listPresets() };
+      const list = presets.listPresets();
+      if (!bool(o.json_out)) return { presets: list };
+      // The names the support bot reads (`data.presets[].paramsHelp`, `.error`), and no more.
+      return {
+        presets: list.map((p) => ({
+          name: p.name,
+          description: p.description,
+          paramsHelp: p.paramsHelp,
+          ...(p.error ? { error: p.error } : {}),
+        })),
+      };
     }
     case 'versions':
       return await runVersions(a, o);

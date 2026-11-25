@@ -319,6 +319,21 @@ describe('a Kubernetes create', () => {
     expect([mockCreated[1]?.license, mockCreated[1]?.licensed]).toEqual(['', true]);
   });
 
+  it('records that a registration token was given, never the token', async () => {
+    await createKubernetes(
+      createReq({
+        version: '8.5.1',
+        name: 'kreg',
+        runtime: 'kubernetes',
+        offline: true,
+        regToken: 'tok-registered',
+      }),
+    );
+    const meta = await readMeta('kreg');
+    expect(meta.extra.registered).toBe(true);
+    expect(JSON.stringify(meta)).not.toContain('tok-registered');
+  });
+
   it('retires its own forwards on a re-up, and keeps them findable while it runs', async () => {
     // The write-ahead record replaced the one holding the forwards, and the re-up then read
     // them back from it: pid 0. Measured on k3s, on the release before this: the old forward
@@ -370,7 +385,9 @@ describe('a Kubernetes create', () => {
     ).catch((error: unknown) => {
       if (!(error instanceof ConflictError)) throw error;
     });
-    expect(said.filter((line) => line.includes('Premium plan for LDAP login'))).toHaveLength(1);
+    expect(
+      said.filter((line) => line.includes('refuse LDAP login without a Premium plan')),
+    ).toHaveLength(1);
   });
 
   it('composes several presets as one, and records the set as Compose does', async () => {
@@ -483,6 +500,53 @@ describe('a Kubernetes create', () => {
       createReq({ version: '8.5.1', name: 'kurl', runtime: 'kubernetes', offline: true }),
     );
     expect(mockCreated[0]?.rootUrl).toBe('http://localhost:3456');
+  });
+
+  it('gives Rocket.Chat the --root-url, keeps the forward for its own calls, and on a re-up', async () => {
+    // Dropped without a word: Site_Url and the pod's ROOT_URL stayed http://localhost:<port>
+    // (measured on k3s, 2.1.8 too), while the Kubernetes guide says to use --root-url.
+    mockPort = 3457;
+    const asked = { version: '8.5.1', name: 'kroot', runtime: 'kubernetes', offline: true };
+    await createRepro(createReq({ ...asked, rootUrl: 'http://rc.lane.test:3457' }));
+    expect(mockCreated[0]?.rootUrl).toBe('http://rc.lane.test:3457');
+    const meta = await readMeta('kroot');
+    expect(meta.rootUrl).toBe('http://localhost:3457');
+    expect(meta.extra.advertised_url).toBe('http://rc.lane.test:3457');
+    // Left out of a re-up, it is kept, as Compose keeps it.
+    await createRepro(createReq(asked));
+    expect(mockCreated[1]?.rootUrl).toBe('http://rc.lane.test:3457');
+  });
+
+  it('marks a re-up that moves the address, so `ready` moves Site_Url once', async () => {
+    // The database keeps Site_Url whatever ROOT_URL says, and Rocket.Chat sends the browser to it.
+    mockPort = 3459;
+    const asked = { version: '8.5.1', name: 'kmove', runtime: 'kubernetes', offline: true };
+    await createKubernetes(createReq(asked));
+    expect((await readMeta('kmove')).extra.site_url_moved_from).toBeUndefined();
+    await createKubernetes(createReq({ ...asked, rootUrl: 'http://rc.lane.test:3459' }));
+    expect((await readMeta('kmove')).extra.site_url_moved_from).toBe('http://localhost:3459');
+  });
+
+  it('says --root-url is not applied when the chart writes ROOT_URL from an HTTPS name', async () => {
+    mockKtls = { host: 'kroottls.example.test' };
+    mockCreate = () => Promise.reject(new Error('the chart did not install'));
+    const said: string[] = [];
+    await expect(
+      createKubernetes(
+        createReq({
+          version: '8.5.1',
+          name: 'kroottls',
+          runtime: 'kubernetes',
+          offline: true,
+          rootUrl: 'http://rc.lane.test:3458',
+        }),
+        (event) => said.push(event.message),
+      ),
+    ).rejects.toThrow('chart');
+    expect(said).toContain(
+      "--root-url http://rc.lane.test:3458 is not applied: on Kubernetes with HTTPS, Rocket.Chat's " +
+        'ROOT_URL is https://kroottls.example.test, which the chart sets from the name.',
+    );
   });
 
   it('leaves a record behind when it is killed part-way', async () => {

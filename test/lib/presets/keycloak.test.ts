@@ -7,6 +7,7 @@ import {
   REALM,
   manifests,
   realmJson,
+  samlClient,
   service,
   users,
 } from '../../../src/lib/presets/keycloak';
@@ -67,6 +68,16 @@ describe('the generated realm', () => {
   it('allows plain HTTP, because the IdP is reached through a published port', () => {
     expect(JSON.parse(realmJson([], 0)).sslRequired).toBe('none');
     expect(JSON.parse(realmJson([], 0)).realm).toBe(REALM);
+  });
+});
+
+describe("Rocket.Chat's SAML client", () => {
+  it('lets Keycloak post the assertion back to a Site_Url that is not localhost', () => {
+    // Keycloak checks the AuthnRequest's `<Site_Url>/_saml/validate/…` against these, and
+    // `http://localhost*` alone answered 400 to every `--root-url`, proxy and tunnel: measured
+    // on 8.9.1 and 9.0.0 at http://rc-c.kestron.org.
+    const uris = samlClient().redirectUris as string[];
+    expect(uris).toEqual(expect.arrayContaining(['http://*', 'https://*']));
   });
 });
 

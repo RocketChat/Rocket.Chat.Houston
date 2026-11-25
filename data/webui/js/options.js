@@ -218,8 +218,8 @@ function renderPresets() {
   const v9 = ctx.$("#v9");
   v9.hidden = !(major >= 9 && kinds.length && !S.license && !(token && token.value.trim()));
   v9.replaceChildren(
-    `Rocket.Chat 9.0 is set to require a Premium plan for ${andJoin(kinds)} sign-in. `
-    + "Without a license or a registration token, those sign-ins may be refused. ",
+    `Rocket.Chat 9.0 and later require a Premium plan for ${andJoin(kinds)} sign-in. `
+    + "Without a license or a registration token, those sign-ins are refused. ",
     node("button", { type: "button", class: "linkbtn", onclick: openLicense, disabled: !may() }, "Add a license"), " or a ",
     node("button", { type: "button", class: "linkbtn", onclick: openToken }, "registration token"), ".");
   ctx.$("#ppanels").replaceChildren(...[...S.presets].sort().map(paramPanel).filter(Boolean));

@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import type * as AppNS from '../../src/cli/app';
 import type * as HandlersNS from '../../src/cli/handlers';
+import type * as EventsNS from '../../src/lib/events';
 
 interface Printed {
   argv: string[];
@@ -461,6 +462,29 @@ describe('upgrade', () => {
     const result = await command(['upgrade', '-n', 'x', '--to', '8.6.1', '--no-rollback']);
     expect(result.code).toBe(0);
     expect(seen).toEqual([['x', '8.6.1', false, false]]);
+  });
+
+  it("says each of the plan's warnings once, and a warning only the run raises", async () => {
+    // The panel draws the plan's warnings; the run raises them again as it starts.
+    const { warn } = jest.requireActual('../../src/lib/events') as typeof EventsNS;
+    jest.doMock('../../src/core/upgrade', () => ({
+      ...jest.requireActual('../../src/core/upgrade'),
+      plan: async (_name: string, to: string) => ({
+        ...PLAN,
+        to_version: to,
+        warnings: ['after the upgrade: sign in over HTTPS'],
+      }),
+      run: async (name: string, to: string, options: { emit: EventsNS.Emit }) => {
+        warn(options.emit, 'after the upgrade: sign in over HTTPS', { phase: 'upgrade' });
+        warn(options.emit, '--no-backup: nothing to roll back to', { phase: 'upgrade' });
+        return { ...PLAN, name, to_version: to, running_version: to, boot_seconds: 1.0 };
+      },
+    }));
+    const result = await command(['upgrade', '-n', 'x', '--to', '8.6.1']);
+    const out = result.stdout + result.stderr;
+    expect(result.code).toBe(0);
+    expect(out.split('after the upgrade: sign in over HTTPS')).toHaveLength(2);
+    expect(out.split('--no-backup: nothing to roll back to')).toHaveLength(2);
   });
 
   it('calls the service for --rollback', async () => {

@@ -56,8 +56,10 @@ export function samlClient(): Bag {
     clientId: SAML_CLIENT,
     protocol: 'saml',
     enabled: true,
-    // Trailing wildcard: matches whatever host port houston assigns to RC.
-    redirectUris: ['http://localhost*'],
+    // WHERE KEYCLOAK MAY POST THE ASSERTION BACK: Rocket.Chat's `<Site_Url>/_saml/validate/…`.
+    // `http://localhost*` alone refused (400) every workspace whose Site_Url is another name --
+    // `--root-url`, a proxy, a tunnel -- on every version; same reasoning as the OIDC client.
+    redirectUris: ['http://*', 'https://*'],
     frontchannelLogout: true,
     attributes: {
       'saml.assertion.signature': 'true', // sign the assertion

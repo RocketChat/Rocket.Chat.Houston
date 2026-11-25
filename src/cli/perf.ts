@@ -330,6 +330,10 @@ export function parseRamp(value: string, flag: '--ramp' | '--spike'): [number, n
   if (start < 0 || end < 1) {
     throw new ValidationError(`bad ${flag}: ramp needs START >= 0 and END >= 1, e.g. 10:200`);
   }
+  // A spike is measured against its base, so a base of 0 VUs leaves nothing to compare.
+  if (flag === '--spike' && start < 1) {
+    throw new ValidationError('bad --spike: the base must be at least 1 VU, e.g. 10:100');
+  }
   if (flag === '--spike' && end <= start) {
     throw new ValidationError(`--spike peak must exceed base ('${value}')`);
   }

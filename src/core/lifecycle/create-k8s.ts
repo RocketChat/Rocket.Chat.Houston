@@ -505,10 +505,10 @@ export function settleAddressing(job: KubeCreate): void {
   job.root = `http://${request.callHost(job.bindHost)}:${String(job.hostPort)}`;
   job.microservices = job.req.deployment === topology.MICROSERVICES;
   // Allocation, deployment and notes share the same resolved scenario.
-  requestedPreset(job);
+  const built = requestedPreset(job);
   const names = namesOf(job.req.preset || 'default');
   const premium = request.premiumAuthWarning(
-    names,
+    built,
     job.resolved?.rcVersion ?? '',
     job.licensed,
     job.regToken,
@@ -635,6 +635,16 @@ export async function planKubeTls(job: KubeCreate): Promise<void> {
     job.ktls = await tlsplan.kubernetesTlsPlan(job.req, job.tlsspec, job.plan as ClusterPlan, {
       emit: job.emit,
     });
+    // Said, not dropped: with a name the chart writes ROOT_URL from it, and a second entry
+    // would be a server-side-apply conflict (`validateRootAddress`).
+    if (job.req.rootUrl) {
+      warn(
+        job.emit,
+        `--root-url ${job.req.rootUrl} is not applied: on Kubernetes with HTTPS, Rocket.Chat's ` +
+          `ROOT_URL is https://${job.ktls.host}, which the chart sets from the name.`,
+        { phase: 'tls' },
+      );
+    }
     // A preset's own UIs at paths of that name; `installChart` routes them with an Ingress.
     if (job.presetForNotes !== null) {
       job.presetForNotes = withPublicUrl(
@@ -803,7 +813,9 @@ export async function createTheWorkspace(job: KubeCreate): Promise<void> {
     // PASSED AT LAST. `createWorkspace` has taken `rootUrl` since it was written and this
     // call never supplied it, so `valuesFor` never set anything and the chart emitted no
     // ROOT_URL -- Rocket.Chat ran on its own default while every human reached it here.
-    rootUrl: job.root,
+    // `--root-url` is what Rocket.Chat advertises, as on Compose; houston's own calls keep
+    // the forward (`job.root`). It was dropped here, so Site_Url stayed on loopback.
+    rootUrl: job.req.rootUrl || job.root,
     // With a name, the chart's own Ingress template builds the Ingress -- houston
     // hand-writes none.
     tlsHost: job.ktls?.host ?? '',
@@ -846,6 +858,11 @@ export async function buildRecord(job: KubeCreate): Promise<void> {
     adminPassword: job.adminPassword,
     createdAt: bornAt(job.previousMeta),
   });
+  // What Rocket.Chat advertises, under the key Compose records it: `externalUrl`, the notes and
+  // a re-up (`carryRecordedAxes`) read it. Not with a TLS name, which the chart writes itself.
+  if (job.ktls === null && job.req.rootUrl && job.req.rootUrl !== job.root) {
+    job.meta.extra.advertised_url = job.req.rootUrl;
+  }
   // The preset's own record fields -- `mailpit_url`, which `admin.login` reads to fetch an
   // email-2FA code, so without it every login to an email workspace here failed at 2FA.
   // BEFORE the runtime's stamps, so a preset cannot overwrite them.
@@ -894,6 +911,11 @@ export async function buildRecord(job: KubeCreate): Promise<void> {
       emit: job.emit,
     });
   }
+  // A re-up that moves the address keeps the database's Site_Url, which `ready` moves once.
+  const was = job.previousMeta;
+  if (was !== null && externalUrl(was) !== externalUrl(job.meta)) {
+    job.meta.extra.site_url_moved_from = externalUrl(was);
+  }
 }
 
 /** What was ASKED for, so the workspace can be rebuilt exactly as it was. */
@@ -913,6 +935,8 @@ export function recordTheRequest(job: KubeCreate): void {
   // The same key Compose records them under, so re-up, `backup` and `restore --new` carry them.
   if (Object.keys(job.envOverrides).length > 0) meta.extra.env = job.envOverrides;
   if (job.licensed) meta.extra.licensed = true;
+  // A token, never its text: the notes stop asking for a licence a registration may bring.
+  if (job.regToken) meta.extra.registered = true;
   // A preset's self-configuration actions, recorded exactly as the Compose path records
   // them. Without this the OIDC preset would create no OAuth provider and the SAML preset
   // no provider settings -- both recorded and neither applied.

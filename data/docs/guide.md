@@ -10,7 +10,7 @@ Every command also explains itself: `houston <command> --help`.
 [Sample data](#sample-data) · [A customer's settings](#a-customers-settings) ·
 [Settings and environment variables](#settings-and-environment-variables) ·
 [Backup, restore, upgrade](#backup-restore-upgrade) · [HTTPS](#https) ·
-[Monitoring](#monitoring) · [Load testing](#load-testing-and-capacity) ·
+[Monitoring](#monitoring) · [Load testing](loadtest.md) ·
 [REST API](#rest-api) · [Versions and MongoDB](#versions-and-mongodb) ·
 [Where state lives](#where-state-lives)
 
@@ -24,7 +24,7 @@ Every command also explains itself: `houston <command> --help`.
 | inspect | `list` `info` `logs` `ready` `stats` |
 | settings | `use` `config` `env` |
 | data | `seed` `config-import` `backup` `backups` `restore` `upgrade` |
-| performance (Docker only) | `loadtest` `capacity` |
+| performance (Docker only) | `loadtest` `capacity` ([guide](loadtest.md)) |
 | REST | `token` `api` `pat` |
 | web GUI and accounts | `serve` `users` `audit` `chown` |
 | HTTPS | `edge` `trust-ca` `tls-status` |
@@ -243,9 +243,22 @@ On Docker it goes into `.license.env` in the workspace (mode 0600), which the co
 names and never holds; on Kubernetes into a Secret the pod reads it from. `env`, the GUI and
 `houston.log` never show it; backups leave it out, and `up --force` keeps it.
 
-Rocket.Chat 8.8 and 8.9 announce that LDAP, SAML and Custom OAuth login will need a Premium
-plan from 9.0. On Rocket.Chat 9 and later, `up` warns when an `ldap`, `saml` or `oidc`
-workspace has neither `--license` nor `--reg-token`.
+Rocket.Chat 9.0 and later refuse LDAP, SAML and Custom OAuth login without a Premium plan: a
+license carrying `ldap-enterprise`, `saml-enterprise` or `oauth-enterprise` respectively. On
+Rocket.Chat 9 and later, `up` warns when an `ldap`, `saml` or `oidc` workspace has neither
+`--license` nor `--reg-token`. Without one, the `oidc` preset cannot create its provider and
+says so in Rocket.Chat's words ("This is an enterprise feature"). A license applied later in
+Rocket.Chat (Administration → Subscription) takes effect at once; `houston ready --name <name>`
+then finishes the preset's setup (in the GUI: take it down, then bring it up), and asks
+Rocket.Chat which license it now holds. `houston info` and the GUI's notes say all of this for
+as long as it applies, from Rocket.Chat's last answer once there is one.
+
+Rocket.Chat 9.0 also signs in through Custom OAuth (the `oidc` preset, and `ldap --set
+idp=oidc`) only over HTTPS: add `--https` (a browser on this machine, after `houston trust-ca`)
+or `--domain <name>`. On 9.0.x that sign-in still cannot finish through houston's HTTPS: 9.0
+joins the full token address houston gives it onto the provider URL and the callback answers 500
+(fixed in 9.1.0). Test it on 8.9, on 9.1.0 or later, or behind a TLS proxy of your own (`--root-url
+https://<name>`). `houston info` and the GUI's notes say which applies to a workspace.
 
 ---
 
@@ -533,46 +546,6 @@ Upgrading an older stack to this path restarts Grafana; anyone using an existing
 port-forward must run `houston monitor --name <name>` again on their own box.
 
 A bare `--root-url` uses the local Grafana URL; a customer proxy must route `/grafana` to Grafana and configure its sub-path.
-
----
-
-## Load testing and capacity
-
-**Docker workspaces only.** On Kubernetes the traffic would go through one
-`kubectl port-forward`, which saturates long before Rocket.Chat does, so the numbers
-would measure the forward.
-
-```bash
-houston loadtest --name ticket-1234 --scenario journey --vus 50 --duration 60s
-houston loadtest --name ticket-1234 --scenario custom --endpoint "GET /api/v1/channels.list?count=100"
-houston loadtest --name ticket-1234 --scenario journey --save before-fix
-houston loadtest --name ticket-1234 --scenario journey --compare before-fix
-houston capacity --name ticket-1234 --slo "p95=300ms,error=2%"
-```
-
-The load comes from [k6](https://k6.io), run as a temporary container on the
-workspace's own network.
-
-- **Scenarios:** `journey` (a whole session, each step timed), `messages`, `login`,
-  `read`, `mixed`, `webhook`, `badbot` and `custom`.
-- **Shapes:** a constant `--vus`, `--ramp 10:200`, or `--spike 10:100`, which reports
-  how long p95 took to recover. `--stats` on a long run reports memory growth per
-  hour, the sign of a leak.
-- **The customer's hardware:** `--constrain "rc=2cpu/2g,mongo=1cpu/1g"` limits the
-  services for the run and puts back what they had afterwards. Docker cannot clear a limit, so
-  a service that had none is given this machine's whole capacity, which is the same thing. A
-  memory cap below what a service already uses is refused: the kernel would restart it as the
-  test began, and the run would measure the restart.
-- **`--slo p95=300ms,error=1%`** makes the command fail when the target is missed, so it
-  fits in CI.
-- **Diagnosis is on by default:** Rocket.Chat's event-loop lag, MongoDB's slow queries
-  with their plans (it flags `COLLSCAN`), and when errors started, ending in a
-  plain-language verdict.
-
-`capacity` doubles the load until the target breaks, narrows down where, and says why.
-
-**VUs are k6 workers, not Rocket.Chat accounts.** Write scenarios leave real messages
-in `#general`; `read` and `login` add nothing.
 
 ---
 

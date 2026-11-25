@@ -99,8 +99,10 @@ export function buildOptions() {
     const body = total - 2;
     const third = Math.max(2, Math.floor(body / 3));
     const first = Math.max(2, body - 2 * third);
+    // With `stages`, k6 takes the starting VUs from `vus`. It has no top-level
+    // `startVUs`: that was ignored with a warning and the run began at 1 VU.
     return {
-      startVUs: base, summaryTrendStats: TREND,
+      vus: base, summaryTrendStats: TREND,
       stages: [
         { duration: `${first}s`, target: base },
         { duration: "1s", target: peak },
@@ -113,7 +115,7 @@ export function buildOptions() {
   if (ramp) {
     const [start, end] = ramp.split(":").map(Number);
     return {
-      startVUs: start, summaryTrendStats: TREND,
+      vus: start, summaryTrendStats: TREND,
       stages: [{ duration: __ENV.DURATION || "60s", target: end }],
     };
   }

@@ -550,10 +550,13 @@ export async function reuse(
   // rewritten.
   await restoreRoute(meta, emit);
 
+  // The summary AFTER `ready`, which asks Rocket.Chat things the notes say: the GUI's Bring up
+  // printed "sign-in is refused" just under "Rocket.Chat has a license", from before it asked.
+  const waited = wait ? await waitAndFinalize(meta, emit) : null;
   const result = await inspect.summary(meta);
   result.reused = true;
   result.waited = wait;
-  if (wait) Object.assign(result, await waitAndFinalize(meta, emit));
+  if (waited !== null) Object.assign(result, waited);
   // NOT when the caller seeds. `seedHere` means the CLI runs it after this returns, so
   // seeding here as well would seed the workspace twice -- the manifest only ever adds, so
   // the readback would report rooms holding more than planned.
@@ -1162,7 +1165,7 @@ export async function buildDocument(plan: CreatePlan): Promise<void> {
   });
   plan.spec.adminPassword = plan.adminPassword;
   const premium = request.premiumAuthWarning(
-    [(plan.pre as Preset).name],
+    plan.pre as Preset,
     resolved.rcVersion,
     plan.spec.licensed,
     plan.token,
@@ -1229,6 +1232,16 @@ export function buildRecord(plan: CreatePlan): void {
   if (spec.rootUrl && spec.rootUrl !== plan.root) {
     plan.meta.extra.advertised_url = spec.rootUrl;
   }
+  // A rebuild that keeps the data and moves the address: the database keeps the old Site_Url,
+  // which `ready` moves once (`followTheMove`).
+  const was = plan.previousMeta;
+  if (
+    was !== null &&
+    !plan.req.fresh &&
+    record.externalUrl(was) !== record.externalUrl(plan.meta)
+  ) {
+    plan.meta.extra.site_url_moved_from = record.externalUrl(was);
+  }
   if (pre.postReady.length > 0) plan.meta.extra.post_ready = pre.postReady;
   if (pre.notes.length > 0) plan.meta.extra.notes = pre.notes;
   if (pre.instances > 1) plan.meta.extra.instances = pre.instances;
@@ -1238,6 +1251,8 @@ export function buildRecord(plan: CreatePlan): void {
   if (Object.keys(plan.sidePorts).length > 0) plan.meta.extra.side_ports = plan.sidePorts;
   if (Object.keys(plan.envOverrides).length > 0) plan.meta.extra.env = plan.envOverrides;
   if (spec.licensed) plan.meta.extra.licensed = true;
+  // A token, never its text: the notes stop asking for a licence a registration may bring.
+  if (plan.token) plan.meta.extra.registered = true;
   if (plan.req.actor) {
     // Who owns this. Shown by `list` and the GUI card.
     plan.meta.extra.created_by = plan.req.actor;
@@ -1438,10 +1453,12 @@ export async function startTheWorkspace(
 /** The summary the caller gets back, plus waiting and seeding when asked. */
 export async function finish(plan: CreatePlan): Promise<Bag> {
   const meta = plan.meta as record.Metadata;
+  // After `ready`, for the reason `reuse` records.
+  const waited = plan.wait ? await waitAndFinalize(meta, plan.emit) : null;
   const result = await inspect.summary(meta);
   result.reused = false;
   result.waited = plan.wait;
-  if (plan.wait) Object.assign(result, await waitAndFinalize(meta, plan.emit));
+  if (waited !== null) Object.assign(result, waited);
   // NOT when the caller seeds, for the reason `reuse` records.
   if (plan.req.seed && !plan.req.seedHere) {
     result.seed = await seeding.runSeedInline(

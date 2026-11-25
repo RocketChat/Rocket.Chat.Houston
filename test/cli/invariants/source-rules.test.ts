@@ -79,6 +79,6 @@ describe('a JSON command', () => {
     // `reply` is a second place the schema can be chosen.
     expect(replies).toHaveLength(1);
     const speakers = COMMAND_SPECS.filter((spec) => spec.json.mode !== 'none');
-    expect(speakers.length).toBe(12);
+    expect(speakers.length).toBe(13);
   });
 });

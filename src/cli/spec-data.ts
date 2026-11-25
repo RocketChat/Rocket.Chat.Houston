@@ -2075,8 +2075,15 @@ export const COMMAND_SPECS = [
     arguments: [],
     options: [],
     json: {
-      mode: 'none',
+      mode: 'flag',
+      schema: 'houston.presets.v1',
       streams: false,
+      option: {
+        index: 0,
+        description:
+          "print the catalogue as one JSON envelope: each preset's name, description and " +
+          'paramsHelp (its --set keys)',
+      },
     },
   }),
   defineCommand({

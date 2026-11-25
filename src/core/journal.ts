@@ -417,7 +417,8 @@ export function openEntries(): Entry[] {
       continue;
     }
   }
-  return out;
+  // By when each was written: the ids are random, so the file names alone are no order.
+  return out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }
 
 /**
@@ -634,7 +635,9 @@ export async function recover(
   { dryRun = false, login = null }: RecoverOptions = {},
 ): Promise<RecoverRow[]> {
   const results: RecoverRow[] = [];
-  for (const entry of abandoned()) {
+  // Newest first: two runs cut short on one workspace both noted a "prior" state, and the
+  // second's prior is the first's change, so the oldest note's has to be put back last.
+  for (const entry of abandoned().reverse()) {
     const row: RecoverRow = {
       id: entry.id,
       kind: entry.kind,

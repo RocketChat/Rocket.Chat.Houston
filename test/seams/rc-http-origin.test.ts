@@ -29,18 +29,21 @@ describe('a credential-free HTTPS origin probe', () => {
         const output = path.join(directory, 'expired.crt');
         fs.writeFileSync(original, certificate, { mode: 0o600 });
         fs.writeFileSync(keyFile, key, { mode: 0o600 });
-        const result = await capture([
-          'openssl',
-          'x509',
-          '-in',
-          original,
-          '-signkey',
-          keyFile,
-          '-days',
-          '-1',
-          '-out',
-          output,
-        ]);
+        // `-days -1` is how OpenSSL 3.0 dates a certificate into the past; from 3.4 it is
+        // refused ("Non-positive number") and the dates are set outright instead.
+        const resign = ['openssl', 'x509', '-in', original, '-signkey', keyFile] as const;
+        let result = await capture([...resign, '-days', '-1', '-out', output]);
+        if (result.exitCode !== 0) {
+          result = await capture([
+            ...resign,
+            '-not_before',
+            '20200101000000Z',
+            '-not_after',
+            '20200102000000Z',
+            '-out',
+            output,
+          ]);
+        }
         expect(result.exitCode).toBe(0);
         certificate = fs.readFileSync(output, 'utf8');
         expect(Date.parse(new X509Certificate(certificate).validTo)).toBeLessThan(Date.now());

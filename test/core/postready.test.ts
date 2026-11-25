@@ -174,6 +174,8 @@ describe('a half-configured preset says so instead of reporting success', () => 
     expect(joined).toContain('partly configured');
     expect(joined).toContain('saml_idp_cert');
     expect(joined).toContain('houston ready --name w');
+    // The GUI has no `ready`; taking it down and bringing it up runs the same setup.
+    expect(joined).toContain('(in the GUI: take it down, then bring it up)');
     // And the one that SUCCEEDED is not in the list, or the summary means nothing.
     expect(joined).not.toContain('keycloak_master_ssl_off');
   });
@@ -268,7 +270,7 @@ describe('every handler reports a boolean', () => {
     return {
       fetchSamlIdpCert: () => Promise.resolve(value ? 'CERT' : ''),
       setSetting: yes,
-      addOauthService: yes,
+      addOauthService: () => Promise.resolve(value ? null : 'refused'),
       createUser: yes,
       addLivechatAgent: yes,
       getUserId: () => Promise.resolve(value ? 'id2' : null),
@@ -684,6 +686,59 @@ describe('a SAML provider refreshed after a restart', () => {
     expect(said.join(' ')).not.toContain('SAML login button registered');
   });
 
+  it('checks a SAML reload at the address Rocket.Chat redirects to, under --root-url', async () => {
+    // Rocket.Chat sends an unloaded provider's metadata to `<ROOT_URL>/home`. Told to expect
+    // `http://localhost:3600/home` on a workspace advertised at another name, every check read
+    // "unknown": "reload did not finish disabling", SAML "partly configured", on every version.
+    const exposedAs = new Set<string>();
+    const postready = withRcapi({
+      fetchSamlIdpCert: async () => 'CERT',
+      setSetting: async () => true,
+      samlProviderState: async (_root: string, _provider: string, o: { publicUrl?: string }) => {
+        exposedAs.add(String(o.publicUrl));
+        return o.publicUrl === 'http://rc.example.test' ? 'unloaded' : 'unknown';
+      },
+      samlProviderReady: async (_root: string, o: { publicUrl?: string }) => {
+        exposedAs.add(String(o.publicUrl));
+        return o.publicUrl === 'http://rc.example.test';
+      },
+    });
+    const m = samlMeta();
+    m.extra.advertised_url = 'http://rc.example.test';
+    const { said, emit } = recorder();
+    expect(await postready.runPostReady(m, AUTH, emit, { sleep: noSleep })).toEqual([]);
+    expect([...exposedAs]).toEqual(['http://rc.example.test']);
+    expect(said.join(' ')).toContain('SAML login button registered');
+  });
+
+  it('names the license, not a re-run, when Rocket.Chat 9 refuses the sign-in it sets up', async () => {
+    // A 9.0 saml workspace with no license said "Rocket.Chat itself is fine. Re-run ...
+    // houston ready", which fails the same way until a license is added.
+    const postready = withRcapi({
+      fetchSamlIdpCert: async () => 'CERT',
+      setSetting: async () => true,
+      samlProviderReady: async () => false,
+    });
+    const gated = recorder();
+    expect(
+      await postready.runPostReady(samlMeta(), AUTH, gated.emit, {
+        sleep: noSleep,
+        licenseGate: { kinds: 'SAML', modules: 'saml-enterprise' },
+      }),
+    ).toEqual(['saml_idp_cert']);
+    const text = gated.said.join('\n');
+    expect(text).toContain(
+      'Rocket.Chat 9 refuses SAML sign-in without a license carrying saml-enterprise, so this ' +
+        'cannot finish until one is added. Add it, then re-run',
+    );
+    expect(text).toContain('houston ready --name');
+    expect(text).not.toContain('Rocket.Chat itself is fine');
+    // With no gate, the advice is the re-run it was.
+    const plain = recorder();
+    await postready.runPostReady(samlMeta(), AUTH, plain.emit, { sleep: noSleep });
+    expect(plain.said.join('\n')).toContain('Rocket.Chat itself is fine. Re-run');
+  });
+
   it('restores SAML enablement after one replica refuses the disable write', async () => {
     const enabled: string[] = [];
     const postready = withRcapi({
@@ -753,7 +808,10 @@ describe('an OAuth provider that did not configure is not a success', () => {
     // nothing on EVERY path -- so a workspace whose OAuth provider could not be created
     // printed one warning, was left out of the "only partly configured" summary that
     // exists for exactly this, and exited 0.
-    const postready = withRcapi({ addOauthService: () => Promise.resolve(false) });
+    const postready = withRcapi({
+      addOauthService: () =>
+        Promise.resolve('This is an enterprise feature [error-action-not-allowed]'),
+    });
     const m = meta({ preset: 'oidc' });
     m.extra.post_ready = [
       { action: 'create_oauth_provider', name: 'Keycloak', settings: { a: 1 } },
@@ -763,6 +821,10 @@ describe('an OAuth provider that did not configure is not a success', () => {
       'create_oauth_provider',
     ]);
     expect(said.join(' ')).toContain('partly configured');
+    // Rocket.Chat's own reason, so a 9.0 workspace without oauth-enterprise says so.
+    expect(said.join(' ')).toContain(
+      'could not create the OAuth provider: This is an enterprise feature',
+    );
   });
 
   it('names the settings that did not apply, and does not call the button usable', async () => {
@@ -771,7 +833,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
     // discarded, so a provider created with none of them reported "login button
     // registered" -- and the button really was registered, pointing at nothing.
     const postready = withRcapi({
-      addOauthService: () => Promise.resolve(true),
+      addOauthService: () => Promise.resolve(null),
       // The url is the one that matters, and it is the one that refuses.
       setSetting: (_u: string, _a: unknown, _p: string, sid: string) =>
         Promise.resolve(!sid.includes('-url')),
@@ -800,7 +862,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
     let attempt = 0;
     const seen: string[][] = [];
     const postready = withRcapi({
-      addOauthService: () => Promise.resolve(true),
+      addOauthService: () => Promise.resolve(null),
       setSetting: (_u: string, _a: unknown, _p: string, sid: string) => {
         const round = seen[attempt] ?? (seen[attempt] = []);
         round.push(sid);
@@ -823,7 +885,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
   it('gives up after three retries rather than looping forever', async () => {
     let rounds = 0;
     const postready = withRcapi({
-      addOauthService: () => Promise.resolve(true),
+      addOauthService: () => Promise.resolve(null),
       setSetting: () => {
         rounds += 1;
         return Promise.resolve(false);
@@ -866,7 +928,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
     const writes: string[] = [];
     const reads: string[] = [];
     const postready = withRcapi({
-      addOauthService: async () => true,
+      addOauthService: async () => null,
       setSetting: async (
         _root: string,
         _auth: unknown,
@@ -905,7 +967,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
   it('leaves a new provider disabled when its configuration was refused', async () => {
     const writes: string[] = [];
     const postready = withRcapi({
-      addOauthService: async () => true,
+      addOauthService: async () => null,
       setSetting: async (_root: string, _auth: unknown, _pw: string, sid: string) => {
         writes.push(sid);
         return !sid.endsWith('-url');
@@ -926,7 +988,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
   it('names an enable refusal without retrying or reporting a registered button', async () => {
     const writes: string[] = [];
     const postready = withRcapi({
-      addOauthService: async () => true,
+      addOauthService: async () => null,
       setSetting: async (_root: string, _auth: unknown, _pw: string, sid: string) => {
         writes.push(sid);
         return sid !== 'Accounts_OAuth_Custom-Keycloak';
@@ -946,7 +1008,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
     const writes: unknown[] = [];
     const waits: number[] = [];
     const postready = withRcapi({
-      addOauthService: async () => true,
+      addOauthService: async () => null,
       setSetting: async (
         _root: string,
         _auth: unknown,
@@ -987,7 +1049,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
     let observations = 0;
     let waits = 0;
     const postready = withRcapi({
-      addOauthService: async () => true,
+      addOauthService: async () => null,
       setSetting: async () => true,
       call: async () => {
         observations += 1;
@@ -1013,7 +1075,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
     let now = 1000;
     const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
     const postready = withRcapi({
-      addOauthService: async () => true,
+      addOauthService: async () => null,
       setSetting: async () => true,
       call: async () => {
         now += 33_001;
@@ -1036,7 +1098,7 @@ describe('an OAuth provider that did not configure is not a success', () => {
     let enabled = true;
     const writes: unknown[] = [];
     const postready = withRcapi({
-      addOauthService: async () => true,
+      addOauthService: async () => null,
       setSetting: async (
         _root: string,
         _auth: unknown,

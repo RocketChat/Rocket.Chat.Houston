@@ -257,9 +257,12 @@ async function applySettings(
   // Custom OAuth providers' settings do not exist until the provider is created -- do that
   // first so its Accounts_OAuth_Custom-*-* PATCHes land.
   for (const name of plan.oauthServices) {
-    if (await addOauthService(rootUrl, admin, pw, name)) {
-      log(`  created custom OAuth provider: ${name}`);
-    }
+    const refused = await addOauthService(rootUrl, admin, pw, name);
+    log(
+      refused === null
+        ? `  created custom OAuth provider: ${name}`
+        : `  could not create custom OAuth provider ${name}: ${refused}`,
+    );
   }
   // Apply everything except the limiter (handled last, in finally) so a dump that
   // re-enables it mid-run cannot throttle the rest of the import.

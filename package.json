@@ -1,6 +1,6 @@
 {
   "name": "@rocket.chat/houston",
-  "version": "2.1.8",
+  "version": "2.1.9",
   "description": "Reproduce a customer's Rocket.Chat issue on their exact version, in minutes.",
   "license": "MIT",
   "repository": {
@@ -76,5 +76,8 @@
     "commander": "~14.0.2",
     "fastify": "5.12.6",
     "yaml": "^2.9.1"
+  },
+  "resolutions": {
+    "minimatch": "^11.0.1"
   }
 }

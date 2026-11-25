@@ -31,7 +31,7 @@ import * as resourcesModule from '../perf/resources';
 import * as sloModule from '../perf/slo';
 import * as timelineModule from '../perf/timeline';
 import * as verdictModule from '../perf/verdict';
-import { Interrupted } from '../seams/exec';
+import { Interrupted, cleanup, unwindsOnInterrupt } from '../seams/exec';
 import { login } from './lifecycle/admin';
 import { grafanaUrlOf } from './lifecycle/inspect';
 import { resolveName } from './lifecycle/naming';
@@ -250,6 +250,26 @@ export async function loginSeedUsers(rootUrl: string, count: number): Promise<Ba
     }
   }
   return users;
+}
+
+/**
+ * The warning for `journey` past 50 VUs per user, or null.
+ *
+ * Each journey iteration logs its VU in afresh (as the VU's seeded user, or the admin) and
+ * uses that session to its last step. Rocket.Chat keeps a user's newest 50 sessions and
+ * deletes the rest, so past 50 VUs per user it deletes sessions still in use, and their
+ * later steps fail with 4xx that are not the server's.
+ */
+export function sessionLimitWarning(scenario: string, vus: number, users: number): string | null {
+  const most = 50 * Math.max(1, users);
+  if (scenario !== 'journey' || vus <= most) return null;
+  const who = users > 0 ? `${String(users)} seeded user${users === 1 ? '' : 's'}` : 'the admin';
+  return (
+    `journey at ${String(vus)} VUs is more than ${String(most)}, 50 per user for ${who}: ` +
+    `Rocket.Chat keeps 50 sessions per user and deletes the older ones while they are ` +
+    `still in use, so some steps fail with 4xx that are not the server's. Use fewer VUs, ` +
+    `or seed more users (houston seed --profile standard makes 20) and use them all`
+  );
 }
 
 /**
@@ -473,7 +493,8 @@ export async function armAndRun({
     } catch (exc) {
       // `constrain.apply` signals its own failures with a plain Error, and those are what
       // this answers; nothing else is expected from it, so wrapping every failure is no
-      // broader a net than the one intended.
+      // broader a net than the one intended. A Ctrl-C is not one of them.
+      if (exc instanceof Interrupted) throw exc;
       throw constrainFailure(cli, exc);
     }
     // NOTED WITH THE PRIOR VALUES, so a killed run can be undone exactly rather than
@@ -820,36 +841,51 @@ export async function runPreparedLoadtest(
   verdict: Awaited<ReturnType<typeof loadtestVerdict>>;
 }> {
   const { auth, m, perService, rcServices, rules, target, token, users } = prepared;
-  const run = newLoadRun();
-  try {
-    await armAndRun({
-      auth,
-      cli,
-      deps,
-      emit,
-      m,
-      perService,
-      rcServices,
-      req,
-      run,
-      target,
-      token,
-      users,
-    });
-  } catch (exc) {
-    // The ReproError taxonomy passes through and anything else is converted; every
-    // failure `armAndRun` can raise on its own is a bad-input-or-engine one, and the
-    // deliberate refusals above keep their own types.
-    if (exc instanceof ReproError) throw exc;
-    if (cli === null) throw new DockerError(errorText(exc));
-    // The CLI's plain error: k6's unreadable or missing summary is REPRO_ERROR, exit 1. A
-    // request that failed is a transport failure, which is not converted, so it goes on to
-    // the contract's last line as it is.
-    if (exc instanceof Error && exc.name === 'RequestFailed') throw exc;
-    throw new ReproError(errorText(exc));
-  } finally {
-    await putEverythingBack({ auth, cli, deps, emit, m, run });
+  const shape = req.spike ?? req.ramp ?? '';
+  const peak = shape !== '' ? Math.max(...shape.split(':').map(Number)) : req.vus;
+  const words = sessionLimitWarning(req.scenario, peak, users.length);
+  if (words !== null) {
+    if (cli === null) warn(emit, words, { phase: 'k6' });
+    else cli.warn(`  ⚠ ${words}`);
   }
+  const run = newLoadRun();
+  // UNWOUND by a Ctrl-C: the wait on k6 raises Interrupted and the restore runs as cleanup,
+  // so what the run changed goes back as it does when the run fails. Without the unwind, a
+  // Ctrl-C ended the process with nothing put back.
+  await unwindsOnInterrupt(async () => {
+    try {
+      await armAndRun({
+        auth,
+        cli,
+        deps,
+        emit,
+        m,
+        perService,
+        rcServices,
+        req,
+        run,
+        target,
+        token,
+        users,
+      });
+    } catch (exc) {
+      if (exc instanceof Interrupted) throw exc;
+      // The ReproError taxonomy passes through and anything else is converted; every
+      // failure `armAndRun` can raise on its own is a bad-input-or-engine one, and the
+      // deliberate refusals above keep their own types.
+      if (exc instanceof ReproError) throw exc;
+      if (cli === null) throw new DockerError(errorText(exc));
+      // The CLI's plain error: k6's unreadable or missing summary is REPRO_ERROR, exit 1. A
+      // request that failed is a transport failure, which is not converted, so it goes on to
+      // the contract's last line as it is.
+      if (exc instanceof Error && exc.name === 'RequestFailed') throw exc;
+      throw new ReproError(errorText(exc));
+    } finally {
+      await cleanup(async () => {
+        await putEverythingBack({ auth, cli, deps, emit, m, run });
+      });
+    }
+  });
 
   const verdict = await loadtestVerdict({ cli, deps, emit, m, req, rules, run });
   return { run, verdict };
@@ -1118,6 +1154,7 @@ export async function searchForCapacity({
     try {
       search.applied = await deps.constrain.apply(m.name, perService);
     } catch (exc) {
+      if (exc instanceof Interrupted) throw exc;
       throw constrainFailure(cli, exc);
     }
     // NOTED WITH THE PRIOR VALUES, so a killed run can be undone exactly rather than
@@ -1222,8 +1259,16 @@ export async function runPreparedCapacity(
 ): Promise<{ search: CapacitySearch; result: string; why: string }> {
   const { auth, m, perService, rcServices, rules, target, token, users } = prepared;
   const search = newCapacitySearch();
+  let warned = false;
 
   const runStep: CapacityStep = async (n: number, tag = '') => {
+    // Said once, at the first step that crosses it: the rows from there on are suspect.
+    const words = warned ? null : sessionLimitWarning(req.scenario, n, users.length);
+    if (words !== null) {
+      warned = true;
+      if (cli === null) warn(emit, words, { phase: 'k6' });
+      else cli.warn(`  ⚠ ${words}`);
+    }
     const sampler = new deps.rcmetrics.RCMetricsSampler(m.name, rcServices).start();
     let s: Bag;
     let rcm: Record<string, Record<string, rcmetricsModule.SeriesSummary>>;
@@ -1280,21 +1325,26 @@ export async function runPreparedCapacity(
     return row;
   };
 
-  try {
-    await searchForCapacity({
-      auth,
-      cli,
-      deps,
-      emit,
-      m,
-      perService,
-      req,
-      runStep,
-      search,
-    });
-  } finally {
-    await putTheWorkspaceBack({ auth, cli, deps, emit, m, search });
-  }
+  // UNWOUND by a Ctrl-C, as `runPreparedLoadtest` is.
+  await unwindsOnInterrupt(async () => {
+    try {
+      await searchForCapacity({
+        auth,
+        cli,
+        deps,
+        emit,
+        m,
+        perService,
+        req,
+        runStep,
+        search,
+      });
+    } finally {
+      await cleanup(async () => {
+        await putTheWorkspaceBack({ auth, cli, deps, emit, m, search });
+      });
+    }
+  });
 
   const { result, why } =
     cli === null ? capacityVerdict(emit, req, search) : capacityWords(req, search);

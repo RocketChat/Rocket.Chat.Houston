@@ -5,7 +5,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const EXPECTED = '53d4fe98f9d12eb94430a66c3e183861b558c7eaaaa5e4e8f26ae09a572a9d02';
+const EXPECTED = '49c82cda71e49a63cfae86ad89c8467d329c92a5b2189ee634cd4988e384d726';
+// Re-recorded for the 9.x sign-in notice saying what 9.0.0 does, not what it was set to do:
+// without a license or a registration token those sign-ins are refused.
 // Re-recorded for side ports allocated per workspace: the Presets page says each preset's
 // ports are preferred (another workspace with it gets the next free one); restore as new no
 // longer names a holder of its ports, since the copy gets its own, and its Restore button

@@ -369,32 +369,66 @@ describe('the voice licence warning', () => {
 });
 
 describe('the Rocket.Chat 9 login warning', () => {
+  // The presets as built, so the warning is held to what each one really sets up.
+  const built = (name: string, params: Record<string, string> = {}) => {
+    const { load } = require('../../../src/lib/presets/index') as typeof PresetsNS;
+    return load(name, params);
+  };
+  const many = (names: string[]) => {
+    const { loadMany } = require('../../../src/lib/presets/index') as typeof PresetsNS;
+    return loadMany(names, {}, 'docker');
+  };
+
   it('names the login presets on 9 and above, with neither a licence nor a token', () => {
-    const said = premiumAuthWarning(['ldap'], '9.0.0', false, '');
-    expect(said).toContain('Premium plan for LDAP login');
-    expect(said).toContain('may be refused');
-    expect(premiumAuthWarning(['saml'], '9.1.0.dev0', false, '')).toContain('SAML');
-    expect(premiumAuthWarning(['oidc'], '9.0.0', false, '')).toContain('Custom OAuth');
+    const said = premiumAuthWarning(built('ldap'), '9.0.0', false, '');
+    expect(said).toContain('refuse LDAP login without a Premium plan');
+    expect(said).toContain('a license carrying ldap-enterprise');
+    expect(said).toContain('will be refused');
+    // Both front-ends: the flags for the terminal, the dialog's button for the GUI, and the
+    // notes for later, rather than flags alone.
+    expect(said).toContain('(--license or --reg-token; in the GUI, Add a license)');
+    expect(said).toContain("as the workspace's notes say");
+    expect(said).not.toContain('--license <file>');
+    expect(premiumAuthWarning(built('saml'), '9.1.0.dev0', false, '')).toContain(
+      'SAML login without a Premium plan (a license carrying saml-enterprise)',
+    );
+    expect(premiumAuthWarning(built('oidc'), '9.0.0', false, '')).toContain(
+      'Custom OAuth login without a Premium plan (a license carrying oauth-enterprise)',
+    );
+  });
+
+  it("names every module an ldap workspace signs in through, its idp's too", () => {
+    // ldap's idp=oidc creates a Custom OAuth provider and idp=saml a SAML one: measured on
+    // 9.0.0, the warning named only ldap-enterprise while the OAuth provider was refused.
+    expect(premiumAuthWarning(built('ldap', { idp: 'oidc' }), '9.0.0', false, '')).toContain(
+      'LDAP and Custom OAuth login without a Premium plan (a license carrying ' +
+        'ldap-enterprise and oauth-enterprise)',
+    );
+    expect(premiumAuthWarning(built('ldap', { idp: 'saml' }), '9.0.0', false, '')).toContain(
+      'a license carrying ldap-enterprise and saml-enterprise',
+    );
   });
 
   it('warns for a combination, which Compose passes as the one name it built', () => {
     // `email+ldap` and `ldap+multi-instance` matched no login preset, so Docker never warned
     // for a combination while Kubernetes, passing the members, did.
-    expect(premiumAuthWarning(['email+ldap'], '9.0.0', false, '')).toContain(
-      'Premium plan for LDAP login',
+    expect(premiumAuthWarning(many(['email', 'ldap']), '9.0.0', false, '')).toContain(
+      'refuse LDAP login without a Premium plan',
     );
-    expect(premiumAuthWarning(['ldap+multi-instance'], '9.0.0', false, '')).toContain(
-      'through the ldap preset',
+    const both = premiumAuthWarning(many(['ldap', 'saml']), '9.0.0', false, '');
+    expect(both).toContain(
+      'LDAP and SAML login without a Premium plan (a license carrying ldap-enterprise and saml-enterprise)',
     );
+    expect(both).toContain('through the ldap and saml preset');
   });
 
   it('stays quiet below 9, with a licence or a token, and for other presets', () => {
     expect([
-      premiumAuthWarning(['ldap'], '8.9.0', false, ''),
-      premiumAuthWarning(['ldap'], '9.0.0', true, ''),
-      premiumAuthWarning(['ldap'], '9.0.0', false, 'tok'),
-      premiumAuthWarning(['email', 'default'], '9.0.0', false, ''),
-      premiumAuthWarning(['ldap'], 'not-a-version', false, ''),
+      premiumAuthWarning(built('ldap'), '8.9.0', false, ''),
+      premiumAuthWarning(built('ldap'), '9.0.0', true, ''),
+      premiumAuthWarning(built('ldap'), '9.0.0', false, 'tok'),
+      premiumAuthWarning(many(['email', 'default']), '9.0.0', false, ''),
+      premiumAuthWarning(built('ldap'), 'not-a-version', false, ''),
     ]).toEqual(['', '', '', '', '']);
   });
 });

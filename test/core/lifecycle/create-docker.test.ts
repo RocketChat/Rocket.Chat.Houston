@@ -114,6 +114,30 @@ describe('claiming the Compose ports', () => {
     expect(plan.root).toBe('http://localhost:3100');
   });
 
+  it('gives a Rocket.Chat 9 oidc workspace HTTPS only when asked', async () => {
+    // Turned on by itself, it tied a create nobody asked HTTPS of to the shared edge (refused
+    // beside another home's edge, unusable with :443 held), and on 9.0.x houston's HTTPS cannot
+    // finish the sign-in anyway (RocketChat/Rocket.Chat#43062): the notes say what to add.
+    jest.resetModules();
+    jest.doMock('../../../src/core/lifecycle/ports', () => ({
+      ...jest.requireActual('../../../src/core/lifecycle/ports'),
+      claimSidePorts: preferredSidePorts,
+      pickHostPort: async () => 3100,
+    }));
+    jest.doMock('../../../src/core/lifecycle/preconditions', () => ({
+      ...jest.requireActual('../../../src/core/lifecycle/preconditions'),
+      guardProjectCollision: async () => undefined,
+    }));
+    const createDocker =
+      require('../../../src/core/lifecycle/create-docker') as typeof CreateDockerNS;
+    const plan = createPlan({ req: createReq({ version: '9.0.0' }), emit: nullEmit });
+    plan.cfg = config.loadConfig();
+    plan.pre = presets.load('oidc', {});
+    plan.resolved = { rcVersion: '9.0.0' } as NonNullable<typeof plan.resolved>;
+    await createDocker.claimPorts(plan);
+    expect([plan.tlsspec, plan.req.https]).toEqual([null, false]);
+  });
+
   it('keeps an explicit token and an explicit bind', async () => {
     config.updateConfig((cfg) => {
       cfg.reg_token = 'from-config';
@@ -390,7 +414,9 @@ describe('the create path end to end, stopped at the write seam', () => {
         (event) => said.push(event.message),
       ),
     ).rejects.toThrow('stopped at the write seam');
-    expect(said.filter((line) => line.includes('Premium plan for LDAP login'))).toHaveLength(1);
+    expect(
+      said.filter((line) => line.includes('refuse LDAP login without a Premium plan')),
+    ).toHaveLength(1);
   });
 
   it('warns that an unlicensed voice workspace boots without a call button', async () => {
@@ -888,6 +914,42 @@ describe('rebuilding an existing workspace', () => {
     };
     expect(await rebuilt(false)).toBe(born);
     expect(await rebuilt(true)).not.toBe(born);
+  });
+
+  it('marks a rebuild that moves the address, so `ready` moves Site_Url once', async () => {
+    // An http oidc workspace rebuilt onto https kept Site_Url on http: Rocket.Chat keeps the
+    // stored setting, and its https page sat on the loading spinner (9.0.0, measured).
+    const versions = require('../../../src/lib/versions') as typeof VersionsNS;
+    const createDocker =
+      require('../../../src/core/lifecycle/create-docker') as typeof CreateDockerNS;
+    const rebuilt = async (rootUrl: string, fresh = false): Promise<unknown> => {
+      await writeRecord(
+        'moving',
+        metadata({
+          name: 'moving',
+          project: 'houston-moving',
+          rootUrl: 'http://localhost:3331',
+          extra: { advertised_url: 'http://rc.example.test' },
+        }),
+      );
+      const plan = createDocker.createPlan({
+        req: createReq({ version: '8.5.1', name: 'moving', force: true, fresh, rootUrl }),
+        emit: nullEmit,
+        reproName: 'moving',
+        resolved: versions.resolve('8.5.1', { offline: true }),
+        pre: presets.load('default', {}),
+        root: 'http://localhost:3331',
+        hostPort: 3331,
+        bindHost: '127.0.0.1',
+      });
+      await createDocker.buildDocument(plan);
+      createDocker.buildRecord(plan);
+      return plan.meta?.extra.site_url_moved_from;
+    };
+    expect(await rebuilt('https://rc.example.test')).toBe('http://rc.example.test');
+    expect(await rebuilt('http://rc.example.test')).toBeUndefined();
+    // --fresh starts the database again, and with it Site_Url.
+    expect(await rebuilt('https://rc.example.test', true)).toBeUndefined();
   });
 
   it('keeps it pinned when the record is rebuilt', async () => {
@@ -1639,6 +1701,22 @@ describe('an Enterprise licence', () => {
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
 
+  it('records that a registration token was given, never the token', async () => {
+    // The notes stop asking a registered 9.0 workspace for a licence its registration may bring.
+    const createDocker =
+      require('../../../src/core/lifecycle/create-docker') as typeof CreateDockerNS;
+    const plan = planFor('reg', '');
+    plan.token = 'tok-registered';
+    await createDocker.buildDocument(plan);
+    createDocker.buildRecord(plan);
+    expect(plan.meta?.extra.registered).toBe(true);
+    expect(JSON.stringify(plan.meta)).not.toContain('tok-registered');
+    const bare = planFor('unreg', '');
+    await createDocker.buildDocument(bare);
+    createDocker.buildRecord(bare);
+    expect('registered' in (bare.meta?.extra ?? {})).toBe(false);
+  });
+
   it('is kept by a rebuild that does not name it again', async () => {
     const createDocker =
       require('../../../src/core/lifecycle/create-docker') as typeof CreateDockerNS;
@@ -1794,6 +1872,53 @@ describe('up --pin on a workspace that exists', () => {
     jest.dontMock('../../../src/core/lifecycle/ready');
     jest.dontMock('../../../src/core/lifecycle/inspect');
     jest.resetModules();
+  });
+
+  it('returns the notes as they are after `ready`, which may have asked Rocket.Chat something', async () => {
+    // Measured live: a license added in Rocket.Chat, then the GUI's Bring up. Its job said
+    // "Rocket.Chat has a license", then ended on notes saying sign-in is refused -- the summary
+    // was taken before `ready` asked.
+    jest.resetModules();
+    const PREMIUM = ['ldap-enterprise', 'saml-enterprise', 'oauth-enterprise'];
+    jest.doMock('../../../src/core/runner/queries', () => ({
+      ...jest.requireActual('../../../src/core/runner/queries'),
+      rcState: async () => 'running',
+    }));
+    jest.doMock('../../../src/core/lifecycle/ready', () => ({
+      ...jest.requireActual('../../../src/core/lifecycle/ready'),
+      restoreRoute: async () => undefined,
+      waitAndFinalize: async (meta: Metadata) => {
+        meta.extra.license_status = 'valid';
+        meta.extra.license_modules = PREMIUM;
+        return { booted_s: 7 };
+      },
+    }));
+    const record = require('../../../src/core/runner/record') as {
+      writeRecord: typeof writeRecord;
+      metadata: typeof metadata;
+    };
+    await record.writeRecord(
+      'lic',
+      record.metadata({
+        name: 'lic',
+        project: 'houston-lic',
+        rcVersion: '9.0.0',
+        preset: 'oidc',
+        rootUrl: 'http://localhost:4460',
+        extra: { post_ready: presets.load('oidc', {}).postReady, license_modules: [] },
+      }),
+    );
+    const createDocker =
+      require('../../../src/core/lifecycle/create-docker') as typeof CreateDockerNS;
+    const result = await createDocker.reuse(
+      'lic',
+      true,
+      createReq({ version: '9.0.0', name: 'lic' }),
+      nullEmit,
+    );
+    expect((result.notes as string[]).join('\n')).not.toContain('Premium plan');
+    expect(result.licensed).toBe(true);
+    expect(result.booted_s).toBe(7);
   });
 
   it('pins it, so the next prune keeps it, and makes it the default', async () => {
